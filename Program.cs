@@ -8,6 +8,13 @@ var maxUploadSizeMb = builder.Configuration.GetValue("FileServer:MaxUploadSizeMB
 var adminPassword = builder.Configuration["FileServer:AdminPassword"] ?? "change-me";
 var maxUploadSizeBytes = maxUploadSizeMb * 1024L * 1024L;
 
+// Kestrel otherwise keeps its 30 MB default request-body limit and rejects
+// large multipart requests before the upload endpoint can process them.
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = maxUploadSizeBytes;
+});
+
 var categories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
     ["documents"] = "Documents",
