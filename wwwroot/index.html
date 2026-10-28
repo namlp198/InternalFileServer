@@ -4,241 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Internal File Server</title>
-    <style>
-        :root {
-            color-scheme: light;
-            --bg: #f4f6f8;
-            --panel: #ffffff;
-            --text: #1f2937;
-            --muted: #6b7280;
-            --line: #d9dee7;
-            --primary: #2563eb;
-            --primary-dark: #1d4ed8;
-            --danger: #dc2626;
-            --danger-dark: #b91c1c;
-            --ok-bg: #dcfce7;
-            --ok-text: #166534;
-            --err-bg: #fee2e2;
-            --err-text: #991b1b;
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font-family: Segoe UI, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-            font-size: 15px;
-        }
-
-        header {
-            border-bottom: 1px solid var(--line);
-            background: var(--panel);
-        }
-
-        main, .bar {
-            width: min(1180px, calc(100vw - 32px));
-            margin: 0 auto;
-        }
-
-        .bar {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            align-items: center;
-            padding: 18px 0;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 22px;
-            line-height: 1.2;
-        }
-
-        .subtitle {
-            margin: 4px 0 0;
-            color: var(--muted);
-        }
-
-        main {
-            padding: 24px 0 36px;
-            display: grid;
-            gap: 18px;
-        }
-
-        .panel {
-            background: var(--panel);
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 18px;
-        }
-
-        .upload-controls, .actions, .admin-bar {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .upload-controls {
-            justify-content: space-between;
-            margin-bottom: 14px;
-        }
-
-        .admin-bar {
-            justify-content: flex-end;
-        }
-
-        label {
-            color: var(--muted);
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        select, input[type="search"], input[type="password"] {
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            padding: 10px 12px;
-            font: inherit;
-            background: #fff;
-            min-height: 40px;
-        }
-
-        input[type="search"] { width: min(360px, 100%); }
-        input[type="password"] { width: 220px; }
-
-        .upload-zone {
-            border: 2px dashed #a7b2c3;
-            border-radius: 8px;
-            min-height: 132px;
-            padding: 24px;
-            display: grid;
-            place-items: center;
-            text-align: center;
-            cursor: pointer;
-            background: #f9fafb;
-        }
-
-        .upload-zone:hover, .upload-zone.drag-over {
-            border-color: var(--primary);
-            background: #eff6ff;
-        }
-
-        .upload-title {
-            margin: 0 0 8px;
-            font-weight: 700;
-        }
-
-        .upload-note {
-            margin: 0;
-            color: var(--muted);
-        }
-
-        input[type="file"] { display: none; }
-
-        .actions {
-            justify-content: space-between;
-            margin-bottom: 14px;
-        }
-
-        .filters {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        button, .button {
-            border: 0;
-            border-radius: 8px;
-            padding: 9px 13px;
-            color: #fff;
-            background: var(--primary);
-            cursor: pointer;
-            font: inherit;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 38px;
-        }
-
-        button:hover, .button:hover { background: var(--primary-dark); }
-
-        .secondary {
-            background: #e5e7eb;
-            color: var(--text);
-        }
-
-        .secondary:hover, .secondary.active { background: #cfd6df; }
-
-        .danger { background: var(--danger); }
-        .danger:hover { background: var(--danger-dark); }
-        .hidden { display: none; }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th, td {
-            padding: 12px 10px;
-            border-bottom: 1px solid var(--line);
-            text-align: left;
-            vertical-align: middle;
-        }
-
-        th {
-            color: var(--muted);
-            font-size: 13px;
-            font-weight: 700;
-            background: #f9fafb;
-        }
-
-        td.name {
-            word-break: break-word;
-            font-weight: 600;
-        }
-
-        .badge {
-            display: inline-flex;
-            border: 1px solid var(--line);
-            border-radius: 999px;
-            padding: 3px 8px;
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 700;
-            background: #fff;
-        }
-
-        .row-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .muted { color: var(--muted); }
-
-        .status {
-            margin-top: 12px;
-            padding: 10px 12px;
-            border-radius: 8px;
-        }
-
-        .success { background: var(--ok-bg); color: var(--ok-text); }
-        .error { background: var(--err-bg); color: var(--err-text); }
-
-        @media (max-width: 720px) {
-            .bar { align-items: flex-start; flex-direction: column; }
-            .admin-bar { justify-content: flex-start; }
-            table, thead, tbody, tr, th, td { display: block; }
-            thead { display: none; }
-            tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
-            td { border: 0; padding: 6px 0; }
-            .row-actions { justify-content: flex-start; }
-        }
-    </style>
+    <link rel="stylesheet" href="/site.css">
 </head>
 <body>
     <header>
@@ -248,6 +14,7 @@
                 <p class="subtitle">Upload and download internal documents, tools, and software.</p>
             </div>
             <div class="admin-bar">
+                <a class="button secondary" href="/dashboard.html">Dashboard</a>
                 <span id="adminState" class="muted">User mode</span>
                 <input id="adminPassword" type="password" placeholder="Admin password">
                 <button type="button" id="adminLoginBtn">Admin Login</button>
@@ -260,9 +27,9 @@
     <main>
         <section class="panel">
             <div class="upload-controls">
-                <div>
-                    <label for="uploadCategory">File Type</label>
-                    <select id="uploadCategory"></select>
+                <div class="field">
+                    <label for="uploadPath">Upload to</label>
+                    <select id="uploadPath"></select>
                 </div>
             </div>
 
@@ -278,7 +45,10 @@
 
         <section class="panel">
             <div class="actions">
-                <div class="filters" id="categoryFilters"></div>
+                <div class="field">
+                    <label for="folderFilter">Folder</label>
+                    <select id="folderFilter"></select>
+                </div>
                 <input id="searchInput" type="search" placeholder="Search by file name">
                 <span id="fileCount" class="muted">Loading...</span>
             </div>
@@ -287,7 +57,7 @@
                 <thead>
                     <tr>
                         <th>File Name</th>
-                        <th>Type</th>
+                        <th>Folder</th>
                         <th>Size</th>
                         <th>Updated</th>
                         <th></th>
@@ -300,6 +70,7 @@
         </section>
     </main>
 
+    <script src="/common.js"></script>
     <script>
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
@@ -308,16 +79,15 @@
         const searchInput = document.getElementById('searchInput');
         const fileCount = document.getElementById('fileCount');
         const refreshBtn = document.getElementById('refreshBtn');
-        const uploadCategory = document.getElementById('uploadCategory');
-        const categoryFilters = document.getElementById('categoryFilters');
+        const uploadPath = document.getElementById('uploadPath');
+        const folderFilter = document.getElementById('folderFilter');
         const adminPassword = document.getElementById('adminPassword');
         const adminLoginBtn = document.getElementById('adminLoginBtn');
         const adminLogoutBtn = document.getElementById('adminLogoutBtn');
         const adminState = document.getElementById('adminState');
+        // Option text collapses normal spaces, so nested folders are indented with no-break spaces.
+        const folderIndent = '   ';
         let files = [];
-        let categories = [];
-        let activeCategory = 'all';
-        let adminToken = sessionStorage.getItem('adminPassword') || '';
 
         dropZone.addEventListener('click', () => fileInput.click());
         dropZone.addEventListener('keydown', event => {
@@ -335,114 +105,141 @@
         });
         fileInput.addEventListener('change', event => uploadFiles(event.target.files));
         searchInput.addEventListener('input', renderFiles);
-        refreshBtn.addEventListener('click', loadFiles);
+        folderFilter.addEventListener('change', loadFilesSafely);
+        refreshBtn.addEventListener('click', refresh);
         adminLoginBtn.addEventListener('click', loginAdmin);
         adminLogoutBtn.addEventListener('click', logoutAdmin);
 
         async function init() {
-            await loadCategories();
             updateAdminUi();
+            await loadFolders();
             await loadFiles();
         }
 
-        async function loadCategories() {
-            const response = await fetch('/api/categories');
-            categories = await response.json();
-
-            uploadCategory.innerHTML = categories.map(category =>
-                `<option value="${escapeAttr(category.key)}">${escapeHtml(category.name)}</option>`
-            ).join('');
-
-            renderCategoryFilters();
+        async function refresh() {
+            try {
+                await loadFolders();
+            } catch (error) {
+                setStatus(error instanceof ApiError ? error.message : 'Could not load folders.', 'error');
+            }
+            await loadFilesSafely();
         }
 
-        function renderCategoryFilters() {
-            const filterItems = [{ key: 'all', name: 'All' }, ...categories];
-            categoryFilters.innerHTML = filterItems.map(category =>
-                `<button type="button" class="secondary ${category.key === activeCategory ? 'active' : ''}" data-category="${escapeAttr(category.key)}">${escapeHtml(category.name)}</button>`
-            ).join('');
+        async function loadFolders() {
+            const folders = flattenTree(await apiFetch('/api/folders/tree'));
+            fillFolderSelect(uploadPath, folders, null);
+            fillFolderSelect(folderFilter, folders, 'All top-level');
+        }
 
-            document.querySelectorAll('[data-category]').forEach(button => {
-                button.addEventListener('click', () => {
-                    activeCategory = button.dataset.category;
-                    renderCategoryFilters();
-                    renderFiles();
-                });
+        // Rebuilds a folder select with full paths indented by depth, keeping the current choice when it still exists.
+        function fillFolderSelect(select, folders, allLabel) {
+            const previous = select.value;
+            select.replaceChildren();
+
+            if (allLabel) {
+                select.appendChild(createOption('', allLabel));
+            }
+
+            folders.forEach(folder => {
+                select.appendChild(createOption(folder.path, folderIndent.repeat(folder.depth) + folder.path));
             });
+
+            if ([...select.options].some(option => option.value === previous)) {
+                select.value = previous;
+            }
+        }
+
+        function createOption(value, text) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            return option;
         }
 
         async function loginAdmin() {
             const password = adminPassword.value;
-            const response = await fetch('/api/admin/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password })
-            });
-
-            if (!response.ok) {
-                alert('The admin password is incorrect.');
+            try {
+                await apiFetch('/api/admin/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+            } catch (error) {
+                alert(error.status === 401 ? 'The admin password is incorrect.' : 'Admin login failed.');
                 return;
             }
 
-            adminToken = password;
-            sessionStorage.setItem('adminPassword', password);
+            setAdminPassword(password);
             adminPassword.value = '';
             updateAdminUi();
             renderFiles();
         }
 
         function logoutAdmin() {
-            adminToken = '';
-            sessionStorage.removeItem('adminPassword');
+            clearAdminPassword();
             updateAdminUi();
             renderFiles();
         }
 
         function updateAdminUi() {
-            const isAdmin = Boolean(adminToken);
+            const isAdmin = Boolean(getAdminPassword());
             adminState.textContent = isAdmin ? 'Admin mode' : 'User mode';
             adminPassword.classList.toggle('hidden', isAdmin);
             adminLoginBtn.classList.toggle('hidden', isAdmin);
             adminLogoutBtn.classList.toggle('hidden', !isAdmin);
         }
 
+        function handleUnauthorized() {
+            updateAdminUi();
+            renderFiles();
+            alert('The admin password is no longer valid.');
+        }
+
         async function uploadFiles(selectedFiles) {
             if (!selectedFiles || selectedFiles.length === 0) return;
 
+            if (!uploadPath.value) {
+                setStatus('Choose a folder to upload to.', 'error');
+                return;
+            }
+
             const formData = new FormData();
-            formData.append('category', uploadCategory.value);
+            formData.append('path', uploadPath.value);
             [...selectedFiles].forEach(file => formData.append('files', file));
             setStatus(`Uploading ${selectedFiles.length} file(s)...`);
 
             try {
-                const response = await fetch('/api/upload', { method: 'POST', body: formData });
-                if (!response.ok) {
-                    const data = await response.json().catch(() => ({ message: 'Upload failed.' }));
-                    throw new Error(data.message || 'Upload failed.');
-                }
-
+                await apiFetch('/api/upload', { method: 'POST', body: formData });
                 setStatus(`Uploaded ${selectedFiles.length} file(s).`, 'success');
                 fileInput.value = '';
-                await loadFiles();
+                await loadFilesSafely();
                 setTimeout(() => uploadStatus.innerHTML = '', 3500);
             } catch (error) {
-                setStatus(error.message, 'error');
+                setStatus(error instanceof ApiError ? error.message : 'Upload failed.', 'error');
             }
         }
 
         async function loadFiles() {
-            const response = await fetch('/api/files');
-            files = await response.json();
+            const path = folderFilter.value;
+            const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
+            files = await apiFetch(url);
             renderFiles();
+        }
+
+        async function loadFilesSafely() {
+            try {
+                await loadFiles();
+            } catch (error) {
+                files = [];
+                const message = error instanceof ApiError ? error.message : 'Could not load files.';
+                fileTableBody.innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`;
+                fileCount.textContent = 'Error';
+            }
         }
 
         function renderFiles() {
             const keyword = searchInput.value.trim().toLowerCase();
-            const visibleFiles = files.filter(file => {
-                const categoryMatches = activeCategory === 'all' || file.category === activeCategory;
-                const nameMatches = file.name.toLowerCase().includes(keyword);
-                return categoryMatches && nameMatches;
-            });
+            const visibleFiles = files.filter(file => file.name.toLowerCase().includes(keyword));
             fileCount.textContent = `${visibleFiles.length} file(s)`;
 
             if (visibleFiles.length === 0) {
@@ -450,79 +247,51 @@
                 return;
             }
 
+            const isAdmin = Boolean(getAdminPassword());
             fileTableBody.innerHTML = visibleFiles.map(file => `
                 <tr>
                     <td class="name">${escapeHtml(file.name)}</td>
-                    <td><span class="badge">${escapeHtml(file.categoryName)}</span></td>
+                    <td><span class="badge">${escapeHtml(file.path)}</span></td>
                     <td class="muted">${formatSize(file.size)}</td>
                     <td class="muted">${new Date(file.modified).toLocaleString()}</td>
                     <td>
                         <div class="row-actions">
-                            <a class="button" href="/api/download/${encodeURIComponent(file.category)}/${encodeURIComponent(file.name)}">Download</a>
-                            ${adminToken ? `<button type="button" class="danger" data-delete-category="${escapeAttr(file.category)}" data-delete-name="${escapeAttr(file.name)}">Delete</button>` : ''}
+                            <a class="button" href="${escapeAttr(downloadUrl(file))}">Download</a>
+                            ${isAdmin ? `<button type="button" class="danger" data-delete-path="${escapeAttr(file.path)}" data-delete-name="${escapeAttr(file.name)}">Delete</button>` : ''}
                         </div>
                     </td>
                 </tr>
             `).join('');
 
             document.querySelectorAll('[data-delete-name]').forEach(button => {
-                button.addEventListener('click', () => deleteFile(button.dataset.deleteCategory, button.dataset.deleteName));
+                button.addEventListener('click', () => deleteFile(button.dataset.deletePath, button.dataset.deleteName));
             });
         }
 
-        async function deleteFile(category, filename) {
-            if (!adminToken) {
+        function downloadUrl(file) {
+            return `/api/download?path=${encodeURIComponent(file.path)}&name=${encodeURIComponent(file.name)}`;
+        }
+
+        async function deleteFile(path, name) {
+            if (!getAdminPassword()) {
                 alert('Admin login is required to delete files.');
                 return;
             }
 
-            if (!confirm(`Delete file "${filename}"?`)) return;
-            const response = await fetch(`/api/files/${encodeURIComponent(category)}/${encodeURIComponent(filename)}`, {
-                method: 'DELETE',
-                headers: { 'X-Admin-Password': adminToken }
-            });
+            if (!confirm(`Delete file "${name}"?`)) return;
 
-            if (response.status === 401) {
-                logoutAdmin();
-                alert('The admin password is no longer valid.');
+            try {
+                await apiFetch(`/api/files?path=${encodeURIComponent(path)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' }, handleUnauthorized);
+            } catch (error) {
+                if (error.status !== 401) alert(error instanceof ApiError ? error.message : 'Delete failed.');
                 return;
             }
 
-            if (!response.ok) {
-                alert('Delete failed.');
-                return;
-            }
-
-            await loadFiles();
+            await loadFilesSafely();
         }
 
         function setStatus(message, type) {
             uploadStatus.innerHTML = `<div class="status ${type || ''}">${escapeHtml(message)}</div>`;
-        }
-
-        function formatSize(bytes) {
-            const units = ['B', 'KB', 'MB', 'GB'];
-            let value = bytes;
-            let unit = 0;
-            while (value >= 1024 && unit < units.length - 1) {
-                value /= 1024;
-                unit++;
-            }
-            return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
-        }
-
-        function escapeHtml(value) {
-            return String(value).replace(/[&<>"']/g, char => ({
-                '&': '&amp;',
-                '<': '&lt;',
-                '>': '&gt;',
-                '"': '&quot;',
-                "'": '&#39;'
-            }[char]));
-        }
-
-        function escapeAttr(value) {
-            return escapeHtml(value).replace(/`/g, '&#96;');
         }
 
         init().catch(() => {
