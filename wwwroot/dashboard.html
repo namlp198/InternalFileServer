@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard - Internal File Server</title>
+    <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+    <header>
+        <div class="bar">
+            <div>
+                <h1>Dashboard</h1>
+                <p class="subtitle">Storage statistics and folder management for admins.</p>
+            </div>
+            <div class="admin-bar">
+                <a class="button secondary" href="/">File List</a>
+                <span id="adminState" class="muted">Not logged in</span>
+                <button type="button" id="logoutBtn" class="secondary hidden">Log Out</button>
+                <button type="button" id="refreshBtn" class="hidden">Refresh</button>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <section id="loginPanel" class="panel hidden">
+            <h2 class="panel-title">Admin Login</h2>
+            <p class="muted">The Dashboard is only available to admins.</p>
+            <form id="loginForm" class="field">
+                <input id="loginPassword" type="password" placeholder="Admin password" autocomplete="current-password" required>
+                <button type="submit">Log In</button>
+            </form>
+            <div id="loginStatus"></div>
+        </section>
+
+        <div id="dashboardContent" class="dashboard-content hidden">
+            <section class="panel">
+                <h2 class="panel-title">Overview</h2>
+                <div id="statGrid" class="stat-grid"></div>
+                <div id="statsStatus"></div>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel-title">Recently Updated Files</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>Folder</th>
+                            <th>Size</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recentFilesBody"></tbody>
+                </table>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel-title">Largest Files</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>Folder</th>
+                            <th>Size</th>
+                            <th>Updated</th>
+                        </tr>
+                    </thead>
+                    <tbody id="largestFilesBody"></tbody>
+                </table>
+            </section>
+
+            <section class="panel">
+                <h2 class="panel-title">Folders</h2>
+                <div class="tree-layout">
+                    <ul id="folderTree" class="tree"></ul>
+
+                    <div>
+                        <div class="actions">
+                            <div class="folder-heading">
+                                <p class="stat-label">Selected folder</p>
+                                <p id="selectedFolderTitle" class="folder-title"></p>
+                            </div>
+                            <div class="row-actions">
+                                <button type="button" id="renameFolderBtn" class="secondary hidden">Rename</button>
+                                <button type="button" id="deleteFolderBtn" class="danger hidden">Delete Folder</button>
+                            </div>
+                        </div>
+
+                        <form id="createFolderForm" class="field create-folder">
+                            <label for="newFolderName">New subfolder</label>
+                            <input id="newFolderName" type="text" class="folder-name-input" placeholder="Folder name" autocomplete="off">
+                            <button type="submit" id="createFolderBtn">Create</button>
+                        </form>
+                        <div id="folderStatus"></div>
+
+                        <p id="folderFileCount" class="muted"></p>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>File Name</th>
+                                    <th>Size</th>
+                                    <th>Updated</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="folderFilesBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="/common.js"></script>
+    <script>
+        const adminState = document.getElementById('adminState');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const loginPanel = document.getElementById('loginPanel');
+        const loginForm = document.getElementById('loginForm');
+        const loginPassword = document.getElementById('loginPassword');
+        const loginStatus = document.getElementById('loginStatus');
+        const dashboardContent = document.getElementById('dashboardContent');
+        const statGrid = document.getElementById('statGrid');
+        const statsStatus = document.getElementById('statsStatus');
+        const recentFilesBody = document.getElementById('recentFilesBody');
+        const largestFilesBody = document.getElementById('largestFilesBody');
+        const folderTree = document.getElementById('folderTree');
+        const selectedFolderTitle = document.getElementById('selectedFolderTitle');
+        const renameFolderBtn = document.getElementById('renameFolderBtn');
+        const deleteFolderBtn = document.getElementById('deleteFolderBtn');
+        const createFolderForm = document.getElementById('createFolderForm');
+        const newFolderName = document.getElementById('newFolderName');
+        const createFolderBtn = document.getElementById('createFolderBtn');
+        const folderStatus = document.getElementById('folderStatus');
+        const folderFileCount = document.getElementById('folderFileCount');
+        const folderFilesBody = document.getElementById('folderFilesBody');
+        const arrowCollapsed = '▸';
+        const arrowExpanded = '▾';
+
+        let nodesByPath = new Map();
+        let expandedPaths = null;
+        let selectedPath = null;
+        let folderFiles = [];
+        // Increases on every folder-file request so a slow, older response cannot overwrite a newer one.
+        let folderFilesRequest = 0;
+
+        loginForm.addEventListener('submit', login);
+        logoutBtn.addEventListener('click', () => showLogin(''));
+        refreshBtn.addEventListener('click', refresh);
+        createFolderForm.addEventListener('submit', createFolder);
+        renameFolderBtn.addEventListener('click', renameFolder);
+        deleteFolderBtn.addEventListener('click', deleteFolder);
+        folderFilesBody.addEventListener('click', event => {
+            const button = event.target.closest('button[data-file-index]');
+            if (button) deleteFile(Number(button.dataset.fileIndex));
+        });
+
+        function isLoggedIn() {
+            return Boolean(getAdminPassword());
+        }
+
+        async function login(event) {
+            event.preventDefault();
+            const password = loginPassword.value;
+            try {
+                await apiFetch('/api/admin/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+            } catch (error) {
+                setStatus(loginStatus, error.status === 401 ? 'The admin password is incorrect.' : errorMessage(error, 'Admin login failed.'), 'error');
+                return;
+            }
+
+            setAdminPassword(password);
+            loginPassword.value = '';
+            setStatus(loginStatus, '');
+            await showDashboard();
+        }
+
+        // Clears the stored password and every loaded statistic, then shows only the login form.
+        function showLogin(message) {
+            clearAdminPassword();
+            folderFilesRequest++;
+            nodesByPath = new Map();
+            expandedPaths = null;
+            selectedPath = null;
+            folderFiles = [];
+            statGrid.replaceChildren();
+            recentFilesBody.replaceChildren();
+            largestFilesBody.replaceChildren();
+            folderTree.replaceChildren();
+            folderFilesBody.replaceChildren();
+            folderFileCount.textContent = '';
+            selectedFolderTitle.textContent = '';
+            setStatus(statsStatus, '');
+            setStatus(folderStatus, '');
+
+            dashboardContent.classList.add('hidden');
+            logoutBtn.classList.add('hidden');
+            refreshBtn.classList.add('hidden');
+            loginPanel.classList.remove('hidden');
+            adminState.textContent = 'Not logged in';
+            setStatus(loginStatus, message, message ? 'error' : '');
+            loginPassword.focus();
+        }
+
+        async function showDashboard() {
+            loginPanel.classList.add('hidden');
+            dashboardContent.classList.remove('hidden');
+            logoutBtn.classList.remove('hidden');
+            refreshBtn.classList.remove('hidden');
+            adminState.textContent = 'Admin mode';
+            await refresh();
+        }
+
+        function handleUnauthorized() {
+            showLogin('The admin password is no longer valid. Please log in again.');
+        }
+
+        async function refresh() {
+            refreshBtn.disabled = true;
+            try {
+                await Promise.all([loadStats(), loadTree()]);
+            } finally {
+                refreshBtn.disabled = false;
+            }
+        }
+
+        async function loadStats() {
+            try {
+                const stats = await apiFetch('/api/admin/stats', {}, handleUnauthorized);
+                if (!isLoggedIn()) return;
+                setStatus(statsStatus, '');
+                renderStats(stats);
+            } catch (error) {
+                showError(statsStatus, error, 'Could not load statistics.');
+            }
+        }
+
+        function renderStats(stats) {
+            const cards = [
+                { label: 'Total files', value: stats.totalFiles.toLocaleString() },
+                { label: 'Total size', value: formatSize(stats.totalBytes) },
+                { label: 'Total folders', value: stats.totalFolders.toLocaleString(), detail: 'Subfolders below the top-level folders' },
+                ...stats.roots.map(root => ({
+                    label: root.name,
+                    value: `${root.fileCount.toLocaleString()} file(s)`,
+                    detail: formatSize(root.totalBytes)
+                }))
+            ];
+
+            statGrid.innerHTML = cards.map(card => `
+                <div class="stat-card">
+                    <p class="stat-label">${escapeHtml(card.label)}</p>
+                    <p class="stat-value">${escapeHtml(card.value)}</p>
+                    ${card.detail ? `<p class="stat-detail">${escapeHtml(card.detail)}</p>` : ''}
+                </div>
+            `).join('');
+
+            renderFileSummary(recentFilesBody, stats.recentFiles);
+            renderFileSummary(largestFilesBody, stats.largestFiles);
+        }
+
+        function renderFileSummary(tableBody, files) {
+            if (files.length === 0) {
+                tableBody.innerHTML = '<tr><td colspan="4" class="muted">No files yet.</td></tr>';
+                return;
+            }
+
+            tableBody.innerHTML = files.map(file => `
+                <tr>
+                    <td class="name">${escapeHtml(file.name)}</td>
+                    <td><span class="badge">${escapeHtml(file.path)}</span></td>
+                    <td class="muted">${formatSize(file.size)}</td>
+                    <td class="muted">${escapeHtml(formatDate(file.modified))}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function loadTree() {
+            let tree;
+            try {
+                tree = await apiFetch('/api/folders/tree', {}, handleUnauthorized);
+            } catch (error) {
+                showError(folderStatus, error, 'Could not load folders.');
+                return;
+            }
+
+            if (!isLoggedIn()) return;
+
+            nodesByPath = new Map();
+            indexNodes(tree);
+            if (!expandedPaths) {
+                expandedPaths = new Set(tree.map(node => node.path));
+            }
+
+            if (!selectedPath || !nodesByPath.has(selectedPath)) {
+                selectedPath = tree.length > 0 ? tree[0].path : null;
+            }
+
+            if (selectedPath) expandAncestors(selectedPath);
+            folderTree.replaceChildren(...tree.map(createTreeNode));
+            updateFolderDetail();
+            await loadFolderFiles();
+        }
+
+        function indexNodes(nodes) {
+            nodes.forEach(node => {
+                nodesByPath.set(node.path, node);
+                indexNodes(node.children);
+            });
+        }
+
+        // Builds one tree item with DOM APIs only; names are assigned through textContent so they never parse as HTML.
+        function createTreeNode(node) {
+            const item = document.createElement('li');
+            item.className = 'tree-node';
+
+            const row = document.createElement('div');
+            row.className = 'tree-row';
+
+            if (node.children.length > 0) {
+                const toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = 'tree-toggle';
+                toggle.setAttribute('aria-label', `Expand or collapse ${node.name}`);
+                toggle.addEventListener('click', () => toggleNode(item, toggle, node.path));
+                row.appendChild(toggle);
+            } else {
+                const spacer = document.createElement('span');
+                spacer.className = 'tree-spacer';
+                row.appendChild(spacer);
+            }
+
+            const label = document.createElement('button');
+            label.type = 'button';
+            label.className = 'tree-label';
+            label.dataset.path = node.path;
+            label.title = node.path;
+
+            const name = document.createElement('span');
+            name.className = 'tree-name';
+            name.textContent = node.name;
+
+            const count = document.createElement('span');
+            count.className = 'tree-count';
+            count.textContent = `(${node.fileCount})`;
+
+            label.append(name, count);
+            label.addEventListener('click', () => selectFolder(node.path));
+            row.appendChild(label);
+            item.appendChild(row);
+
+            if (node.children.length > 0) {
+                const children = document.createElement('ul');
+                children.append(...node.children.map(createTreeNode));
+                item.appendChild(children);
+            }
+
+            setNodeExpanded(item, row.querySelector('.tree-toggle'), expandedPaths.has(node.path));
+            markSelected(label);
+            return item;
+        }
+
+        function toggleNode(item, toggle, path) {
+            const expand = !expandedPaths.has(path);
+            if (expand) {
+                expandedPaths.add(path);
+            } else {
+                expandedPaths.delete(path);
+            }
+            setNodeExpanded(item, toggle, expand);
+        }
+
+        function setNodeExpanded(item, toggle, expanded) {
+            item.classList.toggle('collapsed', !expanded);
+            if (toggle) {
+                toggle.textContent = expanded ? arrowExpanded : arrowCollapsed;
+                toggle.setAttribute('aria-expanded', String(expanded));
+            }
+        }
+
+        function markSelected(label) {
+            const selected = label.dataset.path === selectedPath;
+            label.classList.toggle('selected', selected);
+            if (selected) {
+                label.setAttribute('aria-current', 'true');
+            } else {
+                label.removeAttribute('aria-current');
+            }
+        }
+
+        function expandAncestors(path) {
+            for (let index = path.indexOf('/'); index >= 0; index = path.indexOf('/', index + 1)) {
+                expandedPaths.add(path.slice(0, index));
+            }
+        }
+
+        async function selectFolder(path) {
+            selectedPath = path;
+            folderTree.querySelectorAll('.tree-label').forEach(markSelected);
+            setStatus(folderStatus, '');
+            updateFolderDetail();
+            await loadFolderFiles();
+        }
+
+        function updateFolderDetail() {
+            const node = selectedPath ? nodesByPath.get(selectedPath) : null;
+            const canChange = Boolean(node) && !isTopLevel(node.path);
+            selectedFolderTitle.textContent = node ? node.path : 'No folder selected';
+            renameFolderBtn.classList.toggle('hidden', !canChange);
+            deleteFolderBtn.classList.toggle('hidden', !canChange);
+            createFolderBtn.disabled = !node;
+        }
+
+        async function loadFolderFiles() {
+            const path = selectedPath;
+            const request = ++folderFilesRequest;
+            if (!path) {
+                folderFiles = [];
+                renderFolderFiles();
+                return;
+            }
+
+            folderFileCount.textContent = 'Loading...';
+            try {
+                const files = await apiFetch(`/api/files?path=${encodeURIComponent(path)}`, {}, handleUnauthorized);
+                if (request !== folderFilesRequest || !isLoggedIn()) return;
+                folderFiles = files;
+                renderFolderFiles();
+            } catch (error) {
+                if (request !== folderFilesRequest || error.status === 401) return;
+                folderFiles = [];
+                folderFileCount.textContent = 'Error';
+                folderFilesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(errorMessage(error, 'Could not load files.'))}</td></tr>`;
+            }
+        }
+
+        function renderFolderFiles() {
+            folderFileCount.textContent = `${folderFiles.length} file(s) directly in this folder`;
+            if (folderFiles.length === 0) {
+                folderFilesBody.innerHTML = '<tr><td colspan="4" class="muted">No files in this folder.</td></tr>';
+                return;
+            }
+
+            folderFilesBody.innerHTML = folderFiles.map((file, index) => `
+                <tr>
+                    <td class="name">${escapeHtml(file.name)}</td>
+                    <td class="muted">${formatSize(file.size)}</td>
+                    <td class="muted">${escapeHtml(formatDate(file.modified))}</td>
+                    <td>
+                        <div class="row-actions">
+                            <a class="button" href="${escapeAttr(downloadUrl(file))}">Download</a>
+                            <button type="button" class="danger" data-file-index="${index}">Delete</button>
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        async function createFolder(event) {
+            event.preventDefault();
+            const parentPath = selectedPath;
+            if (!parentPath) return;
+
+            try {
+                const created = await sendJson('/api/folders', 'POST', { parentPath, name: newFolderName.value });
+                newFolderName.value = '';
+                expandedPaths.add(parentPath);
+                setStatus(folderStatus, `Created folder "${created.path}".`, 'success');
+            } catch (error) {
+                showError(folderStatus, error, 'Could not create the folder.');
+                return;
+            }
+
+            await refresh();
+        }
+
+        async function renameFolder() {
+            const path = selectedPath;
+            if (!path || isTopLevel(path)) return;
+
+            const currentName = path.slice(path.lastIndexOf('/') + 1);
+            const newName = prompt(`Rename folder "${path}" to:`, currentName);
+            if (newName === null || newName === currentName) return;
+
+            try {
+                const renamed = await sendJson('/api/folders', 'PATCH', { path, newName });
+                expandedPaths = new Set([...expandedPaths].map(expanded => replacePathPrefix(expanded, path, renamed.path)));
+                selectedPath = renamed.path;
+                setStatus(folderStatus, `Renamed folder to "${renamed.path}".`, 'success');
+            } catch (error) {
+                showError(folderStatus, error, 'Could not rename the folder.');
+                return;
+            }
+
+            await refresh();
+        }
+
+        async function deleteFolder() {
+            const node = selectedPath ? nodesByPath.get(selectedPath) : null;
+            if (!node || isTopLevel(node.path)) return;
+
+            const contents = countContents(node);
+            const question = `Delete folder "${node.path}"?\n\n`
+                + `It contains ${contents.files} file(s) and ${contents.folders} subfolder(s). `
+                + 'Everything inside will be deleted. This cannot be undone.';
+            if (!confirm(question)) return;
+
+            const recursive = contents.files + contents.folders > 0;
+            const url = `/api/folders?path=${encodeURIComponent(node.path)}${recursive ? '&recursive=true' : ''}`;
+            try {
+                await apiFetch(url, { method: 'DELETE' }, handleUnauthorized);
+                expandedPaths = new Set([...expandedPaths].filter(expanded => !isSameOrInside(expanded, node.path)));
+                selectedPath = node.path.slice(0, node.path.lastIndexOf('/'));
+                setStatus(folderStatus, `Deleted folder "${node.path}".`, 'success');
+            } catch (error) {
+                showError(folderStatus, error, 'Could not delete the folder.');
+                return;
+            }
+
+            await refresh();
+        }
+
+        async function deleteFile(index) {
+            const file = folderFiles[index];
+            if (!file || !confirm(`Delete file "${file.name}" from "${file.path}"? This cannot be undone.`)) return;
+
+            try {
+                await apiFetch(`/api/files?path=${encodeURIComponent(file.path)}&name=${encodeURIComponent(file.name)}`, { method: 'DELETE' }, handleUnauthorized);
+                setStatus(folderStatus, `Deleted file "${file.name}".`, 'success');
+            } catch (error) {
+                showError(folderStatus, error, 'Could not delete the file.');
+                return;
+            }
+
+            await refresh();
+        }
+
+        function sendJson(url, method, body) {
+            return apiFetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }, handleUnauthorized);
+        }
+
+        // Sums files and subfolders below a node from the loaded tree, for the delete confirmation.
+        function countContents(node) {
+            return node.children.reduce((total, child) => {
+                const inner = countContents(child);
+                return { files: total.files + inner.files, folders: total.folders + 1 + inner.folders };
+            }, { files: node.fileCount, folders: 0 });
+        }
+
+        function isTopLevel(path) {
+            return !path.includes('/');
+        }
+
+        function isSameOrInside(path, folderPath) {
+            return path === folderPath || path.startsWith(`${folderPath}/`);
+        }
+
+        function replacePathPrefix(path, oldPath, newPath) {
+            return isSameOrInside(path, oldPath) ? newPath + path.slice(oldPath.length) : path;
+        }
+
+        function downloadUrl(file) {
+            return `/api/download?path=${encodeURIComponent(file.path)}&name=${encodeURIComponent(file.name)}`;
+        }
+
+        function formatDate(value) {
+            return new Date(value).toLocaleString();
+        }
+
+        function errorMessage(error, fallback) {
+            return error instanceof ApiError ? error.message : fallback;
+        }
+
+        // A 401 has already returned the page to the login form, so it needs no extra message.
+        function showError(target, error, fallback) {
+            if (error.status === 401) return;
+            setStatus(target, errorMessage(error, fallback), 'error');
+        }
+
+        function setStatus(target, message, type) {
+            target.innerHTML = message ? `<div class="status ${type || ''}">${escapeHtml(message)}</div>` : '';
+        }
+
+        if (isLoggedIn()) {
+            showDashboard();
+        } else {
+            showLogin('');
+        }
+    </script>
+</body>
+</html>
