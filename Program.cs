@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 
@@ -6,7 +8,10 @@ var builder = WebApplication.CreateBuilder(args);
 var uploadDirectory = builder.Configuration["FileServer:UploadDirectory"] ?? "uploads";
 var maxUploadSizeMb = builder.Configuration.GetValue("FileServer:MaxUploadSizeMB", 2048);
 var adminPassword = builder.Configuration["FileServer:AdminPassword"] ?? "change-me";
+var maxFolderDepth = builder.Configuration.GetValue("FileServer:MaxFolderDepth", 10);
+var maxFolderNameLength = builder.Configuration.GetValue("FileServer:MaxFolderNameLength", 100);
 var maxUploadSizeBytes = maxUploadSizeMb * 1024L * 1024L;
+var fileTooLargeMessage = $"File exceeds {maxUploadSizeMb} MB.";
 
 // Kestrel otherwise keeps its 30 MB default request-body limit and rejects
 // large multipart requests before the upload endpoint can process them.
@@ -27,13 +32,47 @@ builder.Services.Configure<FormOptions>(options =>
     options.ValueLengthLimit = int.MaxValue;
 });
 
+// Parameter binding failures throw so the error middleware can answer them with a JSON message.
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+
 var app = builder.Build();
 var uploadRoot = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, uploadDirectory));
-Directory.CreateDirectory(uploadRoot);
-foreach (var category in categories.Keys)
+var fileStore = new FileStore(uploadRoot, categories, maxFolderDepth, maxFolderNameLength);
+fileStore.EnsureRoots();
+var contentTypes = new FileExtensionContentTypeProvider();
+
+app.Use(async (context, next) =>
 {
-    Directory.CreateDirectory(GetCategoryRoot(uploadRoot, categories, category));
-}
+    try
+    {
+        await next(context);
+    }
+    catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+    {
+        // The client disconnected; there is nobody left to answer.
+    }
+    catch (Exception exception) when (!context.Response.HasStarted)
+    {
+        var (statusCode, message) = exception switch
+        {
+            StorageException storage => (storage.StatusCode, storage.Message),
+            BadHttpRequestException badRequest => (badRequest.StatusCode, badRequest.Message),
+            DirectoryNotFoundException or FileNotFoundException => (StatusCodes.Status404NotFound, "Not found."),
+            PathTooLongException => (StatusCodes.Status400BadRequest, "Path is too long."),
+            IOException => (StatusCodes.Status409Conflict, "The file or folder is in use."),
+            _ => (StatusCodes.Status500InternalServerError, "Unexpected server error.")
+        };
+
+        if (statusCode == StatusCodes.Status500InternalServerError)
+        {
+            app.Logger.LogError(exception, "Unhandled error while processing {Method} {Path}.", context.Request.Method, context.Request.Path);
+        }
+
+        context.Response.Clear();
+        context.Response.StatusCode = statusCode;
+        await context.Response.WriteAsJsonAsync(new { message });
+    }
+});
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -43,33 +82,30 @@ app.MapGet("/api/categories", () =>
     return Results.Ok(categories.Select(category => new CategoryItem(category.Key, category.Value)));
 });
 
-app.MapGet("/api/files", (string? category) =>
+app.MapGet("/api/files", (string? path, string? category) =>
 {
-    IEnumerable<string> selectedCategories = string.IsNullOrWhiteSpace(category) || category.Equals("all", StringComparison.OrdinalIgnoreCase)
-        ? categories.Keys
-        : new[] { category };
+    IEnumerable<FileItem> files;
+    if (!string.IsNullOrEmpty(path))
+    {
+        files = fileStore.ListFiles(path);
+    }
+    else if (string.IsNullOrWhiteSpace(category) || category.Equals("all", StringComparison.OrdinalIgnoreCase))
+    {
+        files = categories.Keys.SelectMany(categoryKey => fileStore.ListFiles(categoryKey)).ToList();
+    }
+    else
+    {
+        files = fileStore.ListFiles(category);
+    }
 
-    var files = selectedCategories
-        .SelectMany(categoryKey =>
-        {
-            var categoryRoot = GetCategoryRoot(uploadRoot, categories, categoryKey);
-            return Directory.EnumerateFiles(categoryRoot)
-                .Select(path =>
-                {
-                    var info = new FileInfo(path);
-                    return new FileItem(categoryKey, categories[categoryKey], info.Name, info.Length, info.LastWriteTime);
-                });
-        })
-        .OrderByDescending(file => file.Modified);
-
-    return Results.Ok(files);
+    return Results.Ok(files.OrderByDescending(file => file.Modified).ToList());
 });
 
 app.MapPost("/api/admin/verify", (AdminLogin login) =>
 {
     return IsAdmin(login.Password, adminPassword)
         ? Results.Ok(new { isAdmin = true })
-        : Results.Unauthorized();
+        : AdminRequired();
 });
 
 app.MapPost("/api/upload", async (HttpRequest request) =>
@@ -79,9 +115,18 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
         return Results.BadRequest(new { message = "Content type must be multipart/form-data." });
     }
 
-    var form = await request.ReadFormAsync();
-    var category = form["category"].ToString();
-    var categoryRoot = GetCategoryRoot(uploadRoot, categories, category);
+    IFormCollection form;
+    try
+    {
+        form = await request.ReadFormAsync(request.HttpContext.RequestAborted);
+    }
+    catch (Exception exception) when (exception is InvalidDataException or BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge })
+    {
+        return Results.BadRequest(new { message = fileTooLargeMessage });
+    }
+
+    var path = form["path"].ToString();
+    var folder = fileStore.ResolveFolder(string.IsNullOrEmpty(path) ? form["category"].ToString() : path);
 
     if (form.Files.Count == 0)
     {
@@ -98,21 +143,11 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
 
         if (file.Length > maxUploadSizeBytes)
         {
-            return Results.BadRequest(new { message = $"File '{file.FileName}' exceeds {maxUploadSizeMb} MB." });
+            return Results.BadRequest(new { message = fileTooLargeMessage });
         }
 
-        var safeFileName = Path.GetFileName(file.FileName);
-        if (string.IsNullOrWhiteSpace(safeFileName))
-        {
-            return Results.BadRequest(new { message = "Invalid file name." });
-        }
-
-        var targetPath = GetSafeUploadPath(categoryRoot, safeFileName);
-        await using var stream = new FileStream(targetPath, FileMode.Create, FileAccess.Write, FileShare.None);
-        await file.CopyToAsync(stream);
-
-        var info = new FileInfo(targetPath);
-        uploaded.Add(new FileItem(category, categories[category], info.Name, info.Length, info.LastWriteTime));
+        await using var content = file.OpenReadStream();
+        uploaded.Add(await fileStore.SaveFileAsync(folder.RelativePath, Path.GetFileName(file.FileName), content, request.HttpContext.RequestAborted));
     }
 
     return uploaded.Count == 0
@@ -120,78 +155,57 @@ app.MapPost("/api/upload", async (HttpRequest request) =>
         : Results.Ok(uploaded);
 });
 
-app.MapGet("/api/download/{category}/{filename}", (string category, string filename) =>
-{
-    var categoryRoot = GetCategoryRoot(uploadRoot, categories, category);
-    var filePath = GetSafeUploadPath(categoryRoot, filename);
-    if (!File.Exists(filePath))
-    {
-        return Results.NotFound(new { message = "File not found." });
-    }
+app.MapGet("/api/download", (string? path, string? name) => DownloadFile(path, name));
 
-    var provider = new FileExtensionContentTypeProvider();
-    if (!provider.TryGetContentType(filePath, out var contentType))
+app.MapGet("/api/download/{category}/{filename}", (string category, string filename) => DownloadFile(category, filename));
+
+app.MapDelete("/api/files", (string? path, string? name, HttpRequest request) => DeleteFile(request, path, name));
+
+app.MapDelete("/api/files/{category}/{filename}", (string category, string filename, HttpRequest request) => DeleteFile(request, category, filename));
+
+app.Run();
+
+IResult DownloadFile(string? path, string? name)
+{
+    var file = fileStore.ResolveFile(path, name);
+    if (!contentTypes.TryGetContentType(file.Name, out var contentType))
     {
         contentType = "application/octet-stream";
     }
 
-    return Results.File(filePath, contentType, Path.GetFileName(filePath));
-});
+    return Results.File(file.FullPath, contentType, file.Name);
+}
 
-app.MapDelete("/api/files/{category}/{filename}", (string category, string filename, HttpRequest request) =>
+IResult DeleteFile(HttpRequest request, string? path, string? name)
 {
     var password = request.Headers["X-Admin-Password"].ToString();
     if (!IsAdmin(password, adminPassword))
     {
-        return Results.Unauthorized();
+        return AdminRequired();
     }
 
-    var categoryRoot = GetCategoryRoot(uploadRoot, categories, category);
-    var filePath = GetSafeUploadPath(categoryRoot, filename);
-    if (!File.Exists(filePath))
-    {
-        return Results.NotFound(new { message = "File not found." });
-    }
-
-    File.Delete(filePath);
+    fileStore.DeleteFile(path, name);
     return Results.Ok(new { message = "Deleted." });
-});
-
-app.Run();
-
-static string GetCategoryRoot(string uploadRoot, Dictionary<string, string> categories, string category)
-{
-    if (!categories.ContainsKey(category))
-    {
-        throw new BadHttpRequestException("Invalid category.");
-    }
-
-    return Path.GetFullPath(Path.Combine(uploadRoot, category));
 }
 
-static string GetSafeUploadPath(string categoryRoot, string filename)
+static IResult AdminRequired()
 {
-    var safeFileName = Path.GetFileName(filename);
-    if (string.IsNullOrWhiteSpace(safeFileName) || safeFileName != filename)
-    {
-        throw new BadHttpRequestException("Invalid file name.");
-    }
-
-    var fullPath = Path.GetFullPath(Path.Combine(categoryRoot, safeFileName));
-    if (!fullPath.StartsWith(categoryRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-    {
-        throw new BadHttpRequestException("Invalid file path.");
-    }
-
-    return fullPath;
+    return Results.Json(new { message = "Invalid admin password." }, statusCode: StatusCodes.Status401Unauthorized);
 }
 
 static bool IsAdmin(string? password, string adminPassword)
 {
-    return !string.IsNullOrWhiteSpace(adminPassword)
-        && string.Equals(password, adminPassword, StringComparison.Ordinal);
+    if (string.IsNullOrWhiteSpace(adminPassword) || password is null)
+    {
+        return false;
+    }
+
+    // Hashing first gives both sides the same length, so the comparison time does not reveal the password length.
+    var expected = SHA256.HashData(Encoding.UTF8.GetBytes(adminPassword));
+    var actual = SHA256.HashData(Encoding.UTF8.GetBytes(password));
+    return CryptographicOperations.FixedTimeEquals(actual, expected);
 }
 
 record CategoryItem(string Key, string Name);
 record AdminLogin(string Password);
-record FileItem(string Category, string CategoryName, string Name, long Size, DateTime Modified);
+record FileItem(string Category, string CategoryName, string Name, long Size, DateTime Modified, string Path);
