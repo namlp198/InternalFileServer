@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 
@@ -59,7 +60,8 @@ app.Use(async (context, next) =>
             BadHttpRequestException badRequest => (badRequest.StatusCode, badRequest.Message),
             DirectoryNotFoundException or FileNotFoundException => (StatusCodes.Status404NotFound, "Not found."),
             PathTooLongException => (StatusCodes.Status400BadRequest, "Path is too long."),
-            IOException => (StatusCodes.Status409Conflict, "The file or folder is in use."),
+            // Windows reports moving or deleting a folder with open files as access denied.
+            IOException or UnauthorizedAccessException => (StatusCodes.Status409Conflict, "The file or folder is in use."),
             _ => (StatusCodes.Status500InternalServerError, "Unexpected server error.")
         };
 
@@ -163,7 +165,63 @@ app.MapDelete("/api/files", (string? path, string? name, HttpRequest request) =>
 
 app.MapDelete("/api/files/{category}/{filename}", (string category, string filename, HttpRequest request) => DeleteFile(request, category, filename));
 
+app.MapGet("/api/folders/tree", (CancellationToken cancellationToken) => Results.Ok(fileStore.GetTree(cancellationToken)));
+
+// Admin endpoints read their input only after the password check, so a 401 never touches the disk.
+app.MapPost("/api/folders", async (HttpRequest request) =>
+{
+    if (!IsAdminRequest(request))
+    {
+        return AdminRequired();
+    }
+
+    var folder = await ReadJsonAsync<CreateFolderRequest>(request);
+    var created = fileStore.CreateFolder(folder.ParentPath, folder.Name);
+    return Results.Created($"/api/files?path={Uri.EscapeDataString(created.Path)}", created);
+});
+
+app.MapPatch("/api/folders", async (HttpRequest request) =>
+{
+    if (!IsAdminRequest(request))
+    {
+        return AdminRequired();
+    }
+
+    var rename = await ReadJsonAsync<RenameFolderRequest>(request);
+    return Results.Ok(fileStore.RenameFolder(rename.Path, rename.NewName));
+});
+
+app.MapDelete("/api/folders", (HttpRequest request) =>
+{
+    if (!IsAdminRequest(request))
+    {
+        return AdminRequired();
+    }
+
+    var recursiveValue = request.Query["recursive"].ToString();
+    var recursive = false;
+    if (recursiveValue.Length > 0 && !bool.TryParse(recursiveValue, out recursive))
+    {
+        return Results.BadRequest(new { message = "Parameter 'recursive' must be true or false." });
+    }
+
+    fileStore.DeleteFolder(request.Query["path"].ToString(), recursive);
+    return Results.Ok(new { message = "Folder deleted." });
+});
+
+app.MapGet("/api/admin/stats", (HttpRequest request, CancellationToken cancellationToken) =>
+{
+    return IsAdminRequest(request)
+        ? Results.Ok(fileStore.GetStats(cancellationToken))
+        : AdminRequired();
+});
+
 app.Run();
+
+bool IsAdminRequest(HttpRequest request)
+{
+    return IsAdmin(request.Headers["X-Admin-Password"].ToString(), adminPassword);
+}
 
 IResult DownloadFile(string? path, string? name)
 {
@@ -178,14 +236,31 @@ IResult DownloadFile(string? path, string? name)
 
 IResult DeleteFile(HttpRequest request, string? path, string? name)
 {
-    var password = request.Headers["X-Admin-Password"].ToString();
-    if (!IsAdmin(password, adminPassword))
+    if (!IsAdminRequest(request))
     {
         return AdminRequired();
     }
 
     fileStore.DeleteFile(path, name);
     return Results.Ok(new { message = "Deleted." });
+}
+
+static async Task<T> ReadJsonAsync<T>(HttpRequest request) where T : class
+{
+    if (!request.HasJsonContentType())
+    {
+        throw new BadHttpRequestException("Content type must be application/json.", StatusCodes.Status400BadRequest);
+    }
+
+    try
+    {
+        return await request.ReadFromJsonAsync<T>(request.HttpContext.RequestAborted)
+            ?? throw new BadHttpRequestException("Request body is required.", StatusCodes.Status400BadRequest);
+    }
+    catch (JsonException)
+    {
+        throw new BadHttpRequestException("Request body is not valid JSON.", StatusCodes.Status400BadRequest);
+    }
 }
 
 static IResult AdminRequired()
@@ -209,3 +284,8 @@ static bool IsAdmin(string? password, string adminPassword)
 record CategoryItem(string Key, string Name);
 record AdminLogin(string Password);
 record FileItem(string Category, string CategoryName, string Name, long Size, DateTime Modified, string Path);
+record FolderNode(string Name, string Path, int FileCount, IReadOnlyList<FolderNode> Children);
+record RootStats(string Key, string Name, int FileCount, long TotalBytes);
+record StatsResult(int TotalFiles, long TotalBytes, int TotalFolders, IReadOnlyList<RootStats> Roots, IReadOnlyList<FileItem> RecentFiles, IReadOnlyList<FileItem> LargestFiles);
+record CreateFolderRequest(string? ParentPath, string? Name);
+record RenameFolderRequest(string? Path, string? NewName);
