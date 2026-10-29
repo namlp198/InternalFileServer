@@ -352,6 +352,65 @@ public class ServerIntegrationTests
     }
 
     [Fact]
+    public async Task Registering_an_existing_name_never_resets_its_password()
+    {
+        using var server = new TestServer();
+        await server.SignedInAsync("admin1");
+        var client = server.NewClient();
+
+        var takeover = await client.PostAsJsonAsync("/api/auth/register", new { username = "admin1", password = "attacker-pass-1", confirmPassword = "attacker-pass-1" });
+        var attackerLogin = await client.PostAsJsonAsync("/api/auth/login", new { username = "admin1", password = "attacker-pass-1" });
+        var ownerLogin = await client.PostAsJsonAsync("/api/auth/login", new { username = "admin1", password = TestServer.ValidPassword });
+
+        Assert.Equal(HttpStatusCode.Conflict, takeover.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, attackerLogin.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, ownerLogin.StatusCode);
+    }
+
+    [Fact]
+    public async Task Logout_ends_every_session_of_the_user()
+    {
+        using var server = new TestServer();
+        var first = await server.SignedInAsync("admin1");
+        var second = server.NewClient();
+        Assert.Equal(HttpStatusCode.OK, (await second.PostAsJsonAsync("/api/auth/login", new { username = "admin1", password = TestServer.ValidPassword })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await first.PostAsync("/api/auth/logout", null)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await second.GetAsync("/api/auth/me")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Auth_routes_are_rate_limited_per_ip_with_a_json_429()
+    {
+        using var server = new TestServer();
+        var client = server.NewClient();
+        HttpResponseMessage? last = null;
+
+        for (var i = 0; i < 21; i++)
+        {
+            last = await client.PostAsJsonAsync("/api/auth/login", new { username = $"nobody{i}", password = "wrong-password" });
+        }
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, last!.StatusCode);
+        Assert.Equal("Too many requests. Try again later.", await MessageAsync(last));
+    }
+
+    [Fact]
+    public void Configuration_has_the_account_keys_and_no_shared_admin_password()
+    {
+        using var server = new TestServer();
+        var configuration = server.Services.GetRequiredService<IConfiguration>();
+
+        Assert.Null(configuration["FileServer:AdminPassword"]);
+        Assert.Equal("8", configuration["FileServer:MinPasswordLength"]);
+        Assert.Equal("5", configuration["FileServer:MaxFailedLogins"]);
+        Assert.Equal("15", configuration["FileServer:LockoutMinutes"]);
+        Assert.Equal("8", configuration["FileServer:SessionHours"]);
+        Assert.False(string.IsNullOrEmpty(configuration["FileServer:UserStoreFile"]));
+    }
+
+    [Fact]
     public async Task Remote_registration_without_an_admin_is_refused()
     {
         using var server = new TestServer();
