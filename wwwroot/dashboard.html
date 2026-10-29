@@ -24,13 +24,10 @@
 
     <main>
         <section id="loginPanel" class="panel hidden">
-            <h2 class="panel-title">Admin Login</h2>
+            <h2 class="panel-title">Admins only</h2>
             <p class="muted">The Dashboard is only available to admins.</p>
-            <form id="loginForm" class="field">
-                <input id="loginPassword" type="password" placeholder="Admin password" autocomplete="current-password" required>
-                <button type="submit">Log In</button>
-            </form>
             <div id="loginStatus"></div>
+            <a class="button" href="/">Back to File List</a>
         </section>
 
         <div id="dashboardContent" class="dashboard-content hidden">
@@ -118,8 +115,6 @@
         const logoutBtn = document.getElementById('logoutBtn');
         const refreshBtn = document.getElementById('refreshBtn');
         const loginPanel = document.getElementById('loginPanel');
-        const loginForm = document.getElementById('loginForm');
-        const loginPassword = document.getElementById('loginPassword');
         const loginStatus = document.getElementById('loginStatus');
         const dashboardContent = document.getElementById('dashboardContent');
         const statGrid = document.getElementById('statGrid');
@@ -146,8 +141,7 @@
         // Increases on every folder-file request so a slow, older response cannot overwrite a newer one.
         let folderFilesRequest = 0;
 
-        loginForm.addEventListener('submit', login);
-        logoutBtn.addEventListener('click', () => showLogin(''));
+        logoutBtn.addEventListener('click', logout);
         refreshBtn.addEventListener('click', refresh);
         createFolderForm.addEventListener('submit', createFolder);
         renameFolderBtn.addEventListener('click', renameFolder);
@@ -157,33 +151,15 @@
             if (button) deleteFile(Number(button.dataset.fileIndex));
         });
 
+        let signedIn = false;
+
         function isLoggedIn() {
-            return Boolean(getAdminPassword());
+            return signedIn;
         }
 
-        async function login(event) {
-            event.preventDefault();
-            const password = loginPassword.value;
-            try {
-                await apiFetch('/api/admin/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-            } catch (error) {
-                setStatus(loginStatus, error.status === 401 ? 'The admin password is incorrect.' : errorMessage(error, 'Admin login failed.'), 'error');
-                return;
-            }
-
-            setAdminPassword(password);
-            loginPassword.value = '';
-            setStatus(loginStatus, '');
-            await showDashboard();
-        }
-
-        // Clears the stored password and every loaded statistic, then shows only the login form.
+        // Clears every loaded statistic and shows only the message panel.
         function showLogin(message) {
-            clearAdminPassword();
+            signedIn = false;
             folderFilesRequest++;
             nodesByPath = new Map();
             expandedPaths = null;
@@ -205,7 +181,6 @@
             loginPanel.classList.remove('hidden');
             adminState.textContent = 'Not logged in';
             setStatus(loginStatus, message, message ? 'error' : '');
-            loginPassword.focus();
         }
 
         async function showDashboard() {
@@ -218,7 +193,7 @@
         }
 
         function handleUnauthorized() {
-            showLogin('The admin password is no longer valid. Please log in again.');
+            location.replace(loginUrl('/dashboard.html'));
         }
 
         async function refresh() {
@@ -591,11 +566,21 @@
             target.innerHTML = message ? `<div class="status ${type || ''}">${escapeHtml(message)}</div>` : '';
         }
 
-        if (isLoggedIn()) {
-            showDashboard();
-        } else {
-            showLogin('');
+        async function start() {
+            const user = await loadCurrentUser();
+            if (!user) {
+                location.replace(loginUrl('/dashboard.html'));
+                return;
+            }
+            if (user.role !== 'Admin') {
+                showLogin('The Dashboard is only available to admins.');
+                return;
+            }
+            signedIn = true;
+            await showDashboard();
         }
+
+        start();
     </script>
 </body>
 </html>

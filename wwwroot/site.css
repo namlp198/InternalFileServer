@@ -3,7 +3,15 @@
     --bg: #f4f6f8;
     --panel: #ffffff;
     --text: #1f2937;
-    --muted: #6b7280;
+    --muted: #5b6472;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.06);
+    --focus: #1d4ed8;
     --line: #d9dee7;
     --primary: #2563eb;
     --primary-dark: #1d4ed8;
@@ -369,14 +377,193 @@ td.name {
 
 .folder-name-input { width: min(260px, 100%); }
 
-@media (max-width: 720px) {
+/* Design system: focus */
+:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+}
+
+/* Design system: app header */
+.app-header {
+    width: min(1180px, calc(100vw - 32px));
+    margin: 0 auto;
+    padding: var(--space-3) 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+}
+
+.app-header .brand {
+    color: var(--text);
+    font-size: 18px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.nav {
+    display: flex;
+    gap: var(--space-2);
+    flex: 1;
+    flex-wrap: wrap;
+}
+
+.nav a {
+    padding: 8px 12px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.nav a:hover { background: var(--bg); color: var(--text); }
+.nav a[aria-current="page"] { background: #dbeafe; color: var(--primary-dark); }
+
+.user-chip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.user-name {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.role-badge {
+    border-radius: 999px;
+    padding: 3px 10px;
+    background: #dbeafe;
+    color: var(--primary-dark);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+/* Design system: cards and page structure */
+.card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: var(--space-5);
+    min-width: 0;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-4);
+}
+
+.card-header h2 { margin: 0; font-size: 17px; }
+
+.page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+}
+
+.metric-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-4);
+}
+
+.metric-card {
+    --accent: var(--primary);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--space-3);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: var(--space-4);
+    min-width: 0;
+}
+
+.metric-icon {
+    grid-row: span 3;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, white);
+}
+
+.metric-label { margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; }
+.metric-value { margin: 4px 0 0; font-size: 24px; font-weight: 700; overflow-wrap: anywhere; }
+.metric-detail { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+.card-grid-2 {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+}
+
+.table-wrap {
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+.table-wrap table { min-width: 480px; }
+
+.empty-state {
+    padding: var(--space-5);
+    text-align: center;
+    color: var(--muted);
+}
+
+/* Design system: auth pages */
+.auth-card {
+    width: min(420px, calc(100vw - 32px));
+    margin: 48px auto;
+    display: grid;
+    gap: var(--space-3);
+}
+
+.auth-card h1 { margin-bottom: var(--space-2); }
+
+.auth-card form { display: grid; gap: var(--space-3); }
+
+.auth-card .form-row { display: grid; gap: var(--space-1); }
+
+.auth-card input[type="text"],
+.auth-card input[type="password"] {
+    width: 100%;
+}
+
+.field-error {
+    margin: 0;
+    color: var(--err-text);
+    font-size: 13px;
+    min-height: 0;
+}
+
+.field-error:empty { display: none; }
+
+.auth-card .auth-switch { margin: 0; color: var(--muted); }
+
+@media (max-width: 1024px) {
+    .card-grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 640px) {
     .bar { align-items: flex-start; flex-direction: column; }
     .admin-bar { justify-content: flex-start; }
+    .app-header { gap: var(--space-3); }
     .tree-layout { grid-template-columns: minmax(0, 1fr); }
     .tree ul { padding-left: 12px; }
-    table, thead, tbody, tr, th, td { display: block; }
-    thead { display: none; }
-    tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
-    td { border: 0; padding: 6px 0; }
-    .row-actions { justify-content: flex-start; }
+    .card { padding: var(--space-4); }
+    .metric-grid { grid-template-columns: minmax(0, 1fr); }
+    .panel { overflow-x: auto; }
 }

@@ -7,25 +7,25 @@
     <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-    <header>
-        <div class="bar">
-            <div>
-                <h1>Internal File Server</h1>
-                <p class="subtitle">Upload and download internal documents, tools, and software.</p>
-            </div>
-            <div class="admin-bar">
-                <a class="button secondary" href="/dashboard.html">Dashboard</a>
-                <span id="adminState" class="muted">User mode</span>
-                <input id="adminPassword" type="password" placeholder="Admin password">
-                <button type="button" id="adminLoginBtn">Admin Login</button>
-                <button type="button" id="adminLogoutBtn" class="secondary hidden">Log Out</button>
-                <button type="button" id="refreshBtn">Refresh</button>
-            </div>
-        </div>
-    </header>
+    <header id="appHeader"></header>
 
     <main>
-        <section class="panel">
+        <section id="signedOutCard" class="card hidden">
+            <div class="empty-state">
+                <h2>Sign in to browse, upload and download files</h2>
+                <div class="row-actions">
+                    <a class="button" href="/login.html">Sign in</a>
+                    <a class="button secondary" href="/register.html">Register</a>
+                </div>
+            </div>
+        </section>
+
+        <div id="appContent" class="dashboard-content hidden">
+        <section class="card">
+            <div class="card-header">
+                <h2>Upload</h2>
+                <button type="button" id="refreshBtn" class="secondary">Refresh</button>
+            </div>
             <div class="upload-controls">
                 <div class="field">
                     <label for="uploadPath">Upload to</label>
@@ -36,23 +36,24 @@
             <div id="dropZone" class="upload-zone" role="button" tabindex="0">
                 <div>
                     <p class="upload-title">Drop files here or click to choose</p>
-                    <p class="upload-note">Regular users can upload and download. Only admins can delete files.</p>
+                    <p class="upload-note">Signed-in users can upload and download. Only admins can delete files.</p>
                 </div>
                 <input id="fileInput" type="file" multiple>
             </div>
             <div id="uploadStatus"></div>
         </section>
 
-        <section class="panel">
+        <section class="card">
             <div class="actions">
                 <div class="field">
                     <label for="folderFilter">Folder</label>
                     <select id="folderFilter"></select>
                 </div>
-                <input id="searchInput" type="search" placeholder="Search by file name">
+                <input id="searchInput" type="search" placeholder="Search by file name" aria-label="Search by file name">
                 <span id="fileCount" class="muted">Loading...</span>
             </div>
 
+            <div class="table-wrap">
             <table>
                 <thead>
                     <tr>
@@ -67,7 +68,9 @@
                     <tr><td colspan="5" class="muted">Loading files...</td></tr>
                 </tbody>
             </table>
+            </div>
         </section>
+        </div>
     </main>
 
     <script src="/common.js"></script>
@@ -81,10 +84,10 @@
         const refreshBtn = document.getElementById('refreshBtn');
         const uploadPath = document.getElementById('uploadPath');
         const folderFilter = document.getElementById('folderFilter');
-        const adminPassword = document.getElementById('adminPassword');
-        const adminLoginBtn = document.getElementById('adminLoginBtn');
-        const adminLogoutBtn = document.getElementById('adminLogoutBtn');
-        const adminState = document.getElementById('adminState');
+        const appHeader = document.getElementById('appHeader');
+        const appContent = document.getElementById('appContent');
+        const signedOutCard = document.getElementById('signedOutCard');
+        let currentUser = null;
         // Option text collapses normal spaces, so nested folders are indented with no-break spaces.
         const folderIndent = '   ';
         let files = [];
@@ -107,13 +110,22 @@
         searchInput.addEventListener('input', renderFiles);
         folderFilter.addEventListener('change', loadFilesSafely);
         refreshBtn.addEventListener('click', refresh);
-        adminLoginBtn.addEventListener('click', loginAdmin);
-        adminLogoutBtn.addEventListener('click', logoutAdmin);
 
         async function init() {
-            updateAdminUi();
+            currentUser = await loadCurrentUser();
+            if (!currentUser) {
+                signedOutCard.classList.remove('hidden');
+                return;
+            }
+
+            renderAppHeader(appHeader, currentUser, 'files');
+            appContent.classList.remove('hidden');
             await loadFolders();
             await loadFiles();
+        }
+
+        function isAdmin() {
+            return Boolean(currentUser) && currentUser.role === 'Admin';
         }
 
         async function refresh() {
@@ -126,7 +138,7 @@
         }
 
         async function loadFolders() {
-            const folders = flattenTree(await apiFetch('/api/folders/tree'));
+            const folders = flattenTree(await apiFetch('/api/folders/tree', {}, handleUnauthorized));
             fillFolderSelect(uploadPath, folders, null);
             fillFolderSelect(folderFilter, folders, 'All top-level');
         }
@@ -156,43 +168,8 @@
             return option;
         }
 
-        async function loginAdmin() {
-            const password = adminPassword.value;
-            try {
-                await apiFetch('/api/admin/verify', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password })
-                });
-            } catch (error) {
-                alert(error.status === 401 ? 'The admin password is incorrect.' : 'Admin login failed.');
-                return;
-            }
-
-            setAdminPassword(password);
-            adminPassword.value = '';
-            updateAdminUi();
-            renderFiles();
-        }
-
-        function logoutAdmin() {
-            clearAdminPassword();
-            updateAdminUi();
-            renderFiles();
-        }
-
-        function updateAdminUi() {
-            const isAdmin = Boolean(getAdminPassword());
-            adminState.textContent = isAdmin ? 'Admin mode' : 'User mode';
-            adminPassword.classList.toggle('hidden', isAdmin);
-            adminLoginBtn.classList.toggle('hidden', isAdmin);
-            adminLogoutBtn.classList.toggle('hidden', !isAdmin);
-        }
-
         function handleUnauthorized() {
-            updateAdminUi();
-            renderFiles();
-            alert('The admin password is no longer valid.');
+            location.href = loginUrl('/');
         }
 
         async function uploadFiles(selectedFiles) {
@@ -209,7 +186,7 @@
             setStatus(`Uploading ${selectedFiles.length} file(s)...`);
 
             try {
-                await apiFetch('/api/upload', { method: 'POST', body: formData });
+                await apiFetch('/api/upload', { method: 'POST', body: formData }, handleUnauthorized);
                 setStatus(`Uploaded ${selectedFiles.length} file(s).`, 'success');
                 fileInput.value = '';
                 await loadFilesSafely();
@@ -222,7 +199,7 @@
         async function loadFiles() {
             const path = folderFilter.value;
             const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
-            files = await apiFetch(url);
+            files = await apiFetch(url, {}, handleUnauthorized);
             renderFiles();
         }
 
@@ -247,7 +224,7 @@
                 return;
             }
 
-            const isAdmin = Boolean(getAdminPassword());
+            const canDelete = isAdmin();
             fileTableBody.innerHTML = visibleFiles.map(file => `
                 <tr>
                     <td class="name">${escapeHtml(file.name)}</td>
@@ -257,7 +234,7 @@
                     <td>
                         <div class="row-actions">
                             <a class="button" href="${escapeAttr(downloadUrl(file))}">Download</a>
-                            ${isAdmin ? `<button type="button" class="danger" data-delete-path="${escapeAttr(file.path)}" data-delete-name="${escapeAttr(file.name)}">Delete</button>` : ''}
+                            ${canDelete ? `<button type="button" class="danger" data-delete-path="${escapeAttr(file.path)}" data-delete-name="${escapeAttr(file.name)}">Delete</button>` : ''}
                         </div>
                     </td>
                 </tr>
@@ -273,8 +250,8 @@
         }
 
         async function deleteFile(path, name) {
-            if (!getAdminPassword()) {
-                alert('Admin login is required to delete files.');
+            if (!isAdmin()) {
+                alert('Only admins can delete files.');
                 return;
             }
 

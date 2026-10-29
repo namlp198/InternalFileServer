@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in - Internal File Server</title>
+    <link rel="stylesheet" href="/site.css">
+</head>
+<body>
+    <main>
+        <section class="card auth-card">
+            <h1>Sign in</h1>
+            <p class="subtitle">Use your Internal File Server account.</p>
+            <form id="loginForm" novalidate>
+                <div class="form-row">
+                    <label for="username">Username</label>
+                    <input id="username" name="username" type="text" autocomplete="username" required>
+                    <p id="usernameError" class="field-error" role="alert"></p>
+                </div>
+                <div class="form-row">
+                    <label for="password">Password</label>
+                    <input id="password" name="password" type="password" autocomplete="current-password" required>
+                    <p id="passwordError" class="field-error" role="alert"></p>
+                </div>
+                <div id="formStatus"></div>
+                <button type="submit" id="submitBtn">Sign in</button>
+            </form>
+            <p class="auth-switch">No account yet? <a href="/register.html">Register</a></p>
+        </section>
+    </main>
+
+    <script src="/common.js"></script>
+    <script>
+        const form = document.getElementById('loginForm');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+        const usernameError = document.getElementById('usernameError');
+        const passwordError = document.getElementById('passwordError');
+        const formStatus = document.getElementById('formStatus');
+        const submitBtn = document.getElementById('submitBtn');
+        const usernamePattern = /^[A-Za-z0-9._-]{3,32}$/;
+
+        form.addEventListener('submit', submit);
+
+        function setFormStatus(message) {
+            formStatus.replaceChildren();
+            if (!message) return;
+            const box = document.createElement('div');
+            box.className = 'status error';
+            box.setAttribute('role', 'alert');
+            box.textContent = message;
+            formStatus.appendChild(box);
+        }
+
+        // Mirrors the server rules; returns true when the form may be sent.
+        function validate() {
+            usernameError.textContent = usernamePattern.test(usernameInput.value)
+                ? ''
+                : 'Username must be 3-32 characters: letters, digits, dot, dash or underscore.';
+            passwordError.textContent = passwordInput.value ? '' : 'Enter your password.';
+            return !usernameError.textContent && !passwordError.textContent;
+        }
+
+        function serverMessage(error) {
+            if (error instanceof ApiError && error.status === 429) {
+                const minutes = Math.max(1, Math.ceil(error.retryAfter / 60));
+                return `${error.message} Try again in ${minutes} minute(s).`;
+            }
+            return error instanceof ApiError ? error.message : 'Could not sign in. Try again.';
+        }
+
+        async function submit(event) {
+            event.preventDefault();
+            setFormStatus('');
+            if (!validate()) return;
+
+            submitBtn.disabled = true;
+            try {
+                await apiFetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: usernameInput.value, password: passwordInput.value })
+                });
+                const returnUrl = new URLSearchParams(location.search).get('returnUrl');
+                location.href = safeReturnUrl(returnUrl);
+            } catch (error) {
+                setFormStatus(serverMessage(error));
+                submitBtn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

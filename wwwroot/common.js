@@ -1,49 +1,106 @@
-// Shared helpers for index.html and dashboard.html.
+// Shared helpers for every page.
 
-const ADMIN_PASSWORD_KEY = 'adminPassword';
+const SAFE_RETURN_URLS = ['/', '/index.html', '/dashboard.html'];
 
 class ApiError extends Error {
-    constructor(message, status) {
+    constructor(message, status, retryAfter) {
         super(message);
         this.name = 'ApiError';
         this.status = status;
+        this.retryAfter = retryAfter;
     }
 }
 
-function getAdminPassword() {
-    return sessionStorage.getItem(ADMIN_PASSWORD_KEY) || '';
-}
-
-function setAdminPassword(password) {
-    sessionStorage.setItem(ADMIN_PASSWORD_KEY, password);
-}
-
-function clearAdminPassword() {
-    sessionStorage.removeItem(ADMIN_PASSWORD_KEY);
-}
-
-// Fetches a URL with the stored admin password and returns the JSON body (or null).
-// Non-2xx responses throw ApiError carrying the server's {message}; a 401 also clears
-// the stored password and calls onUnauthorized when given.
+// Fetches a URL with the session cookie and returns the JSON body (or null).
+// Non-2xx responses throw ApiError carrying the server's {message}; a 401 also calls
+// onUnauthorized when given.
 async function apiFetch(url, options = {}, onUnauthorized) {
     const headers = new Headers(options.headers || {});
-    const password = getAdminPassword();
-    if (password) headers.set('X-Admin-Password', password);
+    headers.set('X-Requested-With', 'XMLHttpRequest');
 
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...options, headers, credentials: 'same-origin' });
     const isJson = (response.headers.get('Content-Type') || '').includes('application/json');
     const data = isJson ? await response.json().catch(() => null) : null;
 
     if (!response.ok) {
-        if (response.status === 401) {
-            clearAdminPassword();
-            if (onUnauthorized) onUnauthorized();
-        }
+        if (response.status === 401 && onUnauthorized) onUnauthorized();
         const message = data && data.message ? data.message : `Request failed (${response.status}).`;
-        throw new ApiError(message, response.status);
+        const retryAfter = Number(response.headers.get('Retry-After')) || 0;
+        throw new ApiError(message, response.status, retryAfter);
     }
 
     return data;
+}
+
+// Returns the signed-in user ({username, role}), or null when not signed in.
+async function loadCurrentUser() {
+    try {
+        return await apiFetch('/api/auth/me');
+    } catch (error) {
+        if (error instanceof ApiError && error.status === 401) return null;
+        throw error;
+    }
+}
+
+// Returns value only when it is a known same-site page; anything else becomes '/'.
+function safeReturnUrl(value) {
+    return SAFE_RETURN_URLS.includes(value) ? value : '/';
+}
+
+function loginUrl(returnTo) {
+    return `/login.html?returnUrl=${encodeURIComponent(safeReturnUrl(returnTo))}`;
+}
+
+async function logout() {
+    try {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+        location.href = '/login.html';
+    }
+}
+
+// Builds the shared header (brand, nav, user chip, Log Out) with DOM APIs only.
+function renderAppHeader(container, user, activePage) {
+    const bar = document.createElement('div');
+    bar.className = 'app-header';
+
+    const brand = document.createElement('a');
+    brand.className = 'brand';
+    brand.href = '/';
+    brand.textContent = 'Internal File Server';
+    bar.appendChild(brand);
+
+    const nav = document.createElement('nav');
+    nav.className = 'nav';
+    nav.setAttribute('aria-label', 'Main');
+    const links = [{ page: 'files', href: '/', text: 'File List' }];
+    if (user.role === 'Admin') links.push({ page: 'dashboard', href: '/dashboard.html', text: 'Dashboard' });
+    links.forEach(link => {
+        const anchor = document.createElement('a');
+        anchor.href = link.href;
+        anchor.textContent = link.text;
+        if (link.page === activePage) anchor.setAttribute('aria-current', 'page');
+        nav.appendChild(anchor);
+    });
+    bar.appendChild(nav);
+
+    const chip = document.createElement('div');
+    chip.className = 'user-chip';
+    const name = document.createElement('span');
+    name.className = 'user-name';
+    name.textContent = user.username;
+    const badge = document.createElement('span');
+    badge.className = 'role-badge';
+    badge.textContent = user.role;
+    const logoutButton = document.createElement('button');
+    logoutButton.type = 'button';
+    logoutButton.className = 'secondary';
+    logoutButton.textContent = 'Log Out';
+    logoutButton.addEventListener('click', logout);
+    chip.append(name, badge, logoutButton);
+    bar.appendChild(chip);
+
+    container.replaceChildren(bar);
 }
 
 // Flattens a folder tree into [{ path, name, depth }] in display order.
