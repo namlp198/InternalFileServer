@@ -7,83 +7,68 @@
     <link rel="stylesheet" href="/site.css">
 </head>
 <body>
-    <header>
-        <div class="bar">
-            <div>
-                <h1>Dashboard</h1>
-                <p class="subtitle">Storage statistics and folder management for admins.</p>
-            </div>
-            <div class="admin-bar">
-                <a class="button secondary" href="/">File List</a>
-                <span id="adminState" class="muted">Not logged in</span>
-                <button type="button" id="logoutBtn" class="secondary hidden">Log Out</button>
-                <button type="button" id="refreshBtn" class="hidden">Refresh</button>
-            </div>
-        </div>
-    </header>
+    <header id="appHeader"></header>
 
     <main>
-        <section id="loginPanel" class="panel hidden">
-            <h2 class="panel-title">Admins only</h2>
+        <section id="noPermission" class="card hidden">
+            <h2>No permission</h2>
             <p class="muted">The Dashboard is only available to admins.</p>
-            <div id="loginStatus"></div>
             <a class="button" href="/">Back to File List</a>
         </section>
 
         <div id="dashboardContent" class="dashboard-content hidden">
-            <section class="panel">
-                <h2 class="panel-title">Overview</h2>
-                <div id="statGrid" class="stat-grid"></div>
-                <div id="statsStatus"></div>
-            </section>
+            <div class="page-head">
+                <div>
+                    <h1>Dashboard</h1>
+                    <p class="subtitle">Storage statistics, folder management and users.</p>
+                </div>
+                <button type="button" id="refreshBtn">Refresh</button>
+            </div>
 
-            <section class="panel">
-                <h2 class="panel-title">Recently Updated Files</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>File Name</th>
-                            <th>Folder</th>
-                            <th>Size</th>
-                            <th>Updated</th>
-                        </tr>
-                    </thead>
-                    <tbody id="recentFilesBody"></tbody>
-                </table>
-            </section>
+            <div id="statsStatus"></div>
+            <div id="statGrid" class="metric-grid" aria-live="polite"></div>
 
-            <section class="panel">
-                <h2 class="panel-title">Largest Files</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>File Name</th>
-                            <th>Folder</th>
-                            <th>Size</th>
-                            <th>Updated</th>
-                        </tr>
-                    </thead>
-                    <tbody id="largestFilesBody"></tbody>
-                </table>
-            </section>
+            <div class="card-grid-2">
+                <section class="card">
+                    <div class="card-header"><h2>Recently Updated</h2></div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>File Name</th><th>Folder</th><th>Size</th><th>Updated</th></tr>
+                            </thead>
+                            <tbody id="recentFilesBody"></tbody>
+                        </table>
+                    </div>
+                </section>
 
-            <section class="panel">
-                <h2 class="panel-title">Folders</h2>
+                <section class="card">
+                    <div class="card-header"><h2>Largest Files</h2></div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr><th>File Name</th><th>Folder</th><th>Size</th><th>Updated</th></tr>
+                            </thead>
+                            <tbody id="largestFilesBody"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+
+            <section class="card">
+                <div class="card-header">
+                    <div class="folder-heading">
+                        <h2>Folders</h2>
+                        <p id="selectedFolderTitle" class="folder-title"></p>
+                    </div>
+                    <div class="row-actions">
+                        <button type="button" id="renameFolderBtn" class="secondary hidden">Rename</button>
+                        <button type="button" id="deleteFolderBtn" class="danger hidden">Delete Folder</button>
+                    </div>
+                </div>
                 <div class="tree-layout">
-                    <ul id="folderTree" class="tree"></ul>
+                    <ul id="folderTree" class="tree tree-scroll"></ul>
 
                     <div>
-                        <div class="actions">
-                            <div class="folder-heading">
-                                <p class="stat-label">Selected folder</p>
-                                <p id="selectedFolderTitle" class="folder-title"></p>
-                            </div>
-                            <div class="row-actions">
-                                <button type="button" id="renameFolderBtn" class="secondary hidden">Rename</button>
-                                <button type="button" id="deleteFolderBtn" class="danger hidden">Delete Folder</button>
-                            </div>
-                        </div>
-
                         <form id="createFolderForm" class="field create-folder">
                             <label for="newFolderName">New subfolder</label>
                             <input id="newFolderName" type="text" class="folder-name-input" placeholder="Folder name" autocomplete="off">
@@ -92,18 +77,28 @@
                         <div id="folderStatus"></div>
 
                         <p id="folderFileCount" class="muted"></p>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>File Name</th>
-                                    <th>Size</th>
-                                    <th>Updated</th>
-                                    <th></th>
-                                </tr>
-                            </thead>
-                            <tbody id="folderFilesBody"></tbody>
-                        </table>
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr><th>File Name</th><th>Size</th><th>Updated</th><th></th></tr>
+                                </thead>
+                                <tbody id="folderFilesBody"></tbody>
+                            </table>
+                        </div>
                     </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-header"><h2>Users</h2></div>
+                <div id="usersStatus"></div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr><th>Username</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr>
+                        </thead>
+                        <tbody id="usersBody"></tbody>
+                    </table>
                 </div>
             </section>
         </div>
@@ -111,11 +106,9 @@
 
     <script src="/common.js"></script>
     <script>
-        const adminState = document.getElementById('adminState');
-        const logoutBtn = document.getElementById('logoutBtn');
+        const appHeader = document.getElementById('appHeader');
         const refreshBtn = document.getElementById('refreshBtn');
-        const loginPanel = document.getElementById('loginPanel');
-        const loginStatus = document.getElementById('loginStatus');
+        const noPermission = document.getElementById('noPermission');
         const dashboardContent = document.getElementById('dashboardContent');
         const statGrid = document.getElementById('statGrid');
         const statsStatus = document.getElementById('statsStatus');
@@ -131,8 +124,16 @@
         const folderStatus = document.getElementById('folderStatus');
         const folderFileCount = document.getElementById('folderFileCount');
         const folderFilesBody = document.getElementById('folderFilesBody');
+        const usersStatus = document.getElementById('usersStatus');
+        const usersBody = document.getElementById('usersBody');
         const arrowCollapsed = '▸';
         const arrowExpanded = '▾';
+        const metricAccents = ['#2563eb', '#7c3aed', '#0d9488', '#d97706', '#db2777', '#4f46e5'];
+        const metricIcons = {
+            files: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+            size: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+            folders: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+        };
 
         let nodesByPath = new Map();
         let expandedPaths = null;
@@ -140,8 +141,9 @@
         let folderFiles = [];
         // Increases on every folder-file request so a slow, older response cannot overwrite a newer one.
         let folderFilesRequest = 0;
+        let currentUser = null;
+        let signedIn = false;
 
-        logoutBtn.addEventListener('click', logout);
         refreshBtn.addEventListener('click', refresh);
         createFolderForm.addEventListener('submit', createFolder);
         renameFolderBtn.addEventListener('click', renameFolder);
@@ -151,61 +153,46 @@
             if (button) deleteFile(Number(button.dataset.fileIndex));
         });
 
-        let signedIn = false;
-
         function isLoggedIn() {
             return signedIn;
-        }
-
-        // Clears every loaded statistic and shows only the message panel.
-        function showLogin(message) {
-            signedIn = false;
-            folderFilesRequest++;
-            nodesByPath = new Map();
-            expandedPaths = null;
-            selectedPath = null;
-            folderFiles = [];
-            statGrid.replaceChildren();
-            recentFilesBody.replaceChildren();
-            largestFilesBody.replaceChildren();
-            folderTree.replaceChildren();
-            folderFilesBody.replaceChildren();
-            folderFileCount.textContent = '';
-            selectedFolderTitle.textContent = '';
-            setStatus(statsStatus, '');
-            setStatus(folderStatus, '');
-
-            dashboardContent.classList.add('hidden');
-            logoutBtn.classList.add('hidden');
-            refreshBtn.classList.add('hidden');
-            loginPanel.classList.remove('hidden');
-            adminState.textContent = 'Not logged in';
-            setStatus(loginStatus, message, message ? 'error' : '');
-        }
-
-        async function showDashboard() {
-            loginPanel.classList.add('hidden');
-            dashboardContent.classList.remove('hidden');
-            logoutBtn.classList.remove('hidden');
-            refreshBtn.classList.remove('hidden');
-            adminState.textContent = 'Admin mode';
-            await refresh();
         }
 
         function handleUnauthorized() {
             location.replace(loginUrl('/dashboard.html'));
         }
 
+        function showNoPermission() {
+            noPermission.classList.remove('hidden');
+        }
+
+        async function showDashboard() {
+            dashboardContent.classList.remove('hidden');
+            await refresh();
+        }
+
         async function refresh() {
             refreshBtn.disabled = true;
             try {
-                await Promise.all([loadStats(), loadTree()]);
+                await Promise.all([loadStats(), loadTree(), loadUsers()]);
             } finally {
                 refreshBtn.disabled = false;
             }
         }
 
+        // Replaces a table body with one full-width message row.
+        function setMessageRow(tableBody, columns, message, className) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = columns;
+            cell.className = className || 'muted';
+            cell.textContent = message;
+            row.appendChild(cell);
+            tableBody.replaceChildren(row);
+        }
+
         async function loadStats() {
+            setMessageRow(recentFilesBody, 4, 'Loading…');
+            setMessageRow(largestFilesBody, 4, 'Loading…');
             try {
                 const stats = await apiFetch('/api/admin/stats', {}, handleUnauthorized);
                 if (!isLoggedIn()) return;
@@ -213,28 +200,53 @@
                 renderStats(stats);
             } catch (error) {
                 showError(statsStatus, error, 'Could not load statistics.');
+                setMessageRow(recentFilesBody, 4, errorMessage(error, 'Could not load statistics.'), 'error');
+                setMessageRow(largestFilesBody, 4, errorMessage(error, 'Could not load statistics.'), 'error');
             }
+        }
+
+        // Builds one metric card with DOM APIs only; the icon is a static SVG string.
+        function createMetricCard(card, accent) {
+            const item = document.createElement('div');
+            item.className = 'metric-card';
+            item.style.setProperty('--accent', accent);
+
+            const icon = document.createElement('div');
+            icon.className = 'metric-icon';
+            icon.setAttribute('aria-hidden', 'true');
+            icon.innerHTML = `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${metricIcons[card.icon]}</svg>`;
+
+            const label = document.createElement('p');
+            label.className = 'metric-label';
+            label.textContent = card.label;
+            const value = document.createElement('p');
+            value.className = 'metric-value';
+            value.textContent = card.value;
+            item.append(icon, label, value);
+
+            if (card.detail) {
+                const detail = document.createElement('p');
+                detail.className = 'metric-detail';
+                detail.textContent = card.detail;
+                item.appendChild(detail);
+            }
+            return item;
         }
 
         function renderStats(stats) {
             const cards = [
-                { label: 'Total files', value: stats.totalFiles.toLocaleString() },
-                { label: 'Total size', value: formatSize(stats.totalBytes) },
-                { label: 'Total folders', value: stats.totalFolders.toLocaleString(), detail: 'Subfolders below the top-level folders' },
+                { label: 'Total files', value: stats.totalFiles.toLocaleString(), icon: 'files' },
+                { label: 'Total size', value: formatSize(stats.totalBytes), icon: 'size' },
+                { label: 'Total folders', value: stats.totalFolders.toLocaleString(), detail: 'Subfolders below the top-level folders', icon: 'folders' },
                 ...stats.roots.map(root => ({
                     label: root.name,
-                    value: `${root.fileCount.toLocaleString()} file(s)`,
-                    detail: formatSize(root.totalBytes)
+                    value: formatSize(root.totalBytes),
+                    detail: `${root.fileCount.toLocaleString()} file(s), ${formatSize(root.totalBytes)}`,
+                    icon: 'folders'
                 }))
             ];
 
-            statGrid.innerHTML = cards.map(card => `
-                <div class="stat-card">
-                    <p class="stat-label">${escapeHtml(card.label)}</p>
-                    <p class="stat-value">${escapeHtml(card.value)}</p>
-                    ${card.detail ? `<p class="stat-detail">${escapeHtml(card.detail)}</p>` : ''}
-                </div>
-            `).join('');
+            statGrid.replaceChildren(...cards.map((card, index) => createMetricCard(card, metricAccents[index % metricAccents.length])));
 
             renderFileSummary(recentFilesBody, stats.recentFiles);
             renderFileSummary(largestFilesBody, stats.largestFiles);
@@ -242,7 +254,7 @@
 
         function renderFileSummary(tableBody, files) {
             if (files.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="4" class="muted">No files yet.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="4" class="empty-state">No files yet.</td></tr>';
                 return;
             }
 
@@ -411,14 +423,14 @@
                 if (request !== folderFilesRequest || error.status === 401) return;
                 folderFiles = [];
                 folderFileCount.textContent = 'Error';
-                folderFilesBody.innerHTML = `<tr><td colspan="4" class="muted">${escapeHtml(errorMessage(error, 'Could not load files.'))}</td></tr>`;
+                setMessageRow(folderFilesBody, 4, errorMessage(error, 'Could not load files.'));
             }
         }
 
         function renderFolderFiles() {
             folderFileCount.textContent = `${folderFiles.length} file(s) directly in this folder`;
             if (folderFiles.length === 0) {
-                folderFilesBody.innerHTML = '<tr><td colspan="4" class="muted">No files in this folder.</td></tr>';
+                setMessageRow(folderFilesBody, 4, 'No files in this folder.');
                 return;
             }
 
@@ -516,6 +528,82 @@
             await refresh();
         }
 
+        async function loadUsers() {
+            setMessageRow(usersBody, 5, 'Loading…');
+            try {
+                const users = await apiFetch('/api/users', {}, handleUnauthorized);
+                if (!isLoggedIn()) return;
+                renderUsers(users);
+            } catch (error) {
+                if (error.status === 401) return;
+                setMessageRow(usersBody, 5, errorMessage(error, 'Could not load users.'), 'error');
+            }
+        }
+
+        function renderUsers(users) {
+            if (users.length === 0) {
+                setMessageRow(usersBody, 5, 'No users yet.');
+                return;
+            }
+            usersBody.replaceChildren(...users.map(createUserRow));
+        }
+
+        // Builds one user row with DOM APIs only; the username is assigned through textContent.
+        function createUserRow(user) {
+            const row = document.createElement('tr');
+
+            const nameCell = document.createElement('td');
+            nameCell.className = 'name';
+            nameCell.textContent = user.username;
+
+            const roleCell = document.createElement('td');
+            const select = document.createElement('select');
+            select.setAttribute('aria-label', `Role for ${user.username}`);
+            ['User', 'Admin'].forEach(role => {
+                const option = document.createElement('option');
+                option.value = role;
+                option.textContent = role;
+                select.appendChild(option);
+            });
+            select.value = user.role;
+            select.addEventListener('change', () => updateUser(user, { role: select.value }, `Changed role of "${user.username}" to ${select.value}.`));
+            roleCell.appendChild(select);
+
+            const statusCell = document.createElement('td');
+            statusCell.textContent = user.disabled ? 'Disabled' : 'Active';
+
+            const createdCell = document.createElement('td');
+            createdCell.className = 'muted';
+            createdCell.textContent = formatDate(user.createdUtc);
+
+            const actionCell = document.createElement('td');
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = user.disabled ? 'secondary' : 'danger';
+            toggle.textContent = user.disabled ? 'Enable' : 'Disable';
+            toggle.addEventListener('click', () => toggleUser(user));
+            actionCell.appendChild(toggle);
+
+            row.append(nameCell, roleCell, statusCell, createdCell, actionCell);
+            return row;
+        }
+
+        async function toggleUser(user) {
+            const disable = !user.disabled;
+            if (disable && !confirm(`Disable user "${user.username}"? They will be signed out and cannot log in.`)) return;
+            await updateUser(user, { disabled: disable }, `${disable ? 'Disabled' : 'Enabled'} user "${user.username}".`);
+        }
+
+        async function updateUser(user, changes, successMessage) {
+            try {
+                await sendJson(`/api/users/${encodeURIComponent(user.id)}`, 'PATCH', changes);
+                setStatus(usersStatus, successMessage, 'success');
+            } catch (error) {
+                showError(usersStatus, error, 'Could not update the user.');
+            }
+            await loadUsers();
+        }
+
         function sendJson(url, method, body) {
             return apiFetch(url, {
                 method,
@@ -556,24 +644,32 @@
             return error instanceof ApiError ? error.message : fallback;
         }
 
-        // A 401 has already returned the page to the login form, so it needs no extra message.
+        // A 401 has already sent the page to the login form, so it needs no extra message.
         function showError(target, error, fallback) {
             if (error.status === 401) return;
             setStatus(target, errorMessage(error, fallback), 'error');
         }
 
         function setStatus(target, message, type) {
-            target.innerHTML = message ? `<div class="status ${type || ''}">${escapeHtml(message)}</div>` : '';
+            if (!message) {
+                target.replaceChildren();
+                return;
+            }
+            const box = document.createElement('div');
+            box.className = `status ${type || ''}`;
+            box.textContent = message;
+            target.replaceChildren(box);
         }
 
         async function start() {
-            const user = await loadCurrentUser();
-            if (!user) {
-                location.replace(loginUrl('/dashboard.html'));
+            currentUser = await loadCurrentUser();
+            if (!currentUser) {
+                handleUnauthorized();
                 return;
             }
-            if (user.role !== 'Admin') {
-                showLogin('The Dashboard is only available to admins.');
+            renderAppHeader(appHeader, currentUser, 'dashboard');
+            if (currentUser.role !== 'Admin') {
+                showNoPermission();
                 return;
             }
             signedIn = true;

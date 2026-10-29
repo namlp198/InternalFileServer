@@ -553,6 +553,16 @@ td.name {
 
 .auth-card .auth-switch { margin: 0; color: var(--muted); }
 
+/* Dashboard additions */
+.tree-scroll {
+    max-height: 420px;
+    overflow: auto;
+}
+
+.metric-grid, .card-grid-2 { min-width: 0; }
+
+td select { min-height: 34px; padding: 4px 8px; }
+
 @media (max-width: 1024px) {
     .card-grid-2 { grid-template-columns: minmax(0, 1fr); }
 }

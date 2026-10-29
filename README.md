@@ -26,7 +26,13 @@ Edit `appsettings.json`:
 
 - `FileServer:UploadDirectory`: file storage directory, default is `uploads`
 - `FileServer:MaxUploadSizeMB`: max size per file, default is 2048 MB
-- `FileServer:AdminPassword`: admin password used for deleting files and managing folders, change it before deployment
+- `FileServer:UserStoreFile`: account file, default is `data/users.json` (relative to the application folder). It must be outside `wwwroot` and the upload directory, otherwise the server refuses to start.
+- `FileServer:MinPasswordLength`: minimum password length, default is `8` (the maximum is 128).
+- `FileServer:MaxFailedLogins`: consecutive failed logins before an account is locked, default is `5`.
+- `FileServer:LockoutMinutes`: lock duration, default is `15`.
+- `FileServer:SessionHours`: sliding session lifetime, default is `8`.
+
+`FileServer:AdminPassword` and the `X-Admin-Password` header no longer exist. If the key is still present in your configuration, the server ignores it and logs a warning. Remove it, and change any old shared password you used elsewhere: earlier versions kept it in `appsettings.json`, so treat it as compromised.
 
 Two optional keys limit the folder tree. They are not in `appsettings.json`; add them under `FileServer` (or set the environment variables `FileServer__MaxFolderDepth` / `FileServer__MaxFolderNameLength`) only when the defaults do not fit:
 
@@ -54,41 +60,79 @@ Folder name rules for creating and renaming folders:
 
 Existing folders created with Explorer only need to pass the path rules above, so a folder such as `Báo cáo (2024)` can still be browsed and used for uploads.
 
-Regular users can browse, upload into existing folders and download. Uploads never create folders. Only an admin logged in with `AdminPassword` can delete files and create, rename or delete folders.
+Signed-in users can browse, upload into existing folders and download. Uploads never create folders. Only an admin can delete files and create, rename or delete folders.
+
+## Accounts and Roles
+
+**Register.** Open `/register.html` (or the `Register` button on the main page). Choose a username (3-32 characters: letters, digits, `.`, `_`, `-`; unique ignoring case) and a password (at least `MinPasswordLength`, at most 128 characters) and confirm it. You are signed in immediately and sent to the File List. New accounts get the role `User`.
+
+**Log in / log out.** Open `/login.html`. A wrong password and an unknown username give the same message. After `MaxFailedLogins` (default 5) consecutive failures the account is locked for `LockoutMinutes` (default 15) and login returns 429 with `Retry-After`, even with the correct password. Lockout state is kept in memory and resets when the server restarts. A disabled account cannot log in. `Log Out` ends all sessions of that user, on every device. Sessions last `SessionHours` (default 8) and slide while in use. The session cookie `ifs.session` is HttpOnly and `SameSite=Lax`.
+
+**Roles and permissions.** Permissions are enforced on the server; hiding buttons in the page is only cosmetic.
+
+| Action | Signed out | User | Admin |
+|---|---|---|---|
+| Register, log in | yes | - | - |
+| Browse folders, list files, upload, download | no | yes | yes |
+| Delete files, create/rename/delete folders | no | no | yes |
+| Dashboard statistics (`/api/admin/stats`) | no | no | yes |
+| List users, change role, enable/disable | no | no | yes |
+
+**First admin (bootstrap).** While no active admin exists, the first account registered from the server machine itself (a loopback connection, for example `http://localhost:5088`) becomes `Admin`. Registration from another machine in that state returns 403 until the first admin exists. Later registrations are `User`; existing passwords are never reset. Warning: behind a reverse proxy running on the same machine every request looks like loopback, so do not expose the server through such a proxy before the first admin has been created. The server has no forwarded-headers handling.
+
+**Managing users.** Admins use the Users card on the Dashboard to change a role or enable/disable an account. A role change applies on the user's next request; disabling ends their session. The last active admin cannot be demoted or disabled (409 `At least one active admin is required.`).
+
+**Account file.** Accounts are stored in `data/users.json` (`FileServer:UserStoreFile`), with PBKDF2-SHA256 password hashes, never plain passwords. The installer creates `{app}\data` as writable. The file is never served, listed or counted. Back it up by copying the file while the server is stopped; to recover, restore the copy. A missing file starts empty; a corrupt file stops the server from starting.
+
+**HTTPS.** On plain HTTP the password and the cookie travel unencrypted on the LAN. Use HTTPS where possible, for example `dotnet run --urls https://0.0.0.0:5443` with a certificate. The cookie gets the `Secure` flag automatically on HTTPS requests (and not on plain HTTP, so LAN login keeps working).
 
 ## Dashboard
 
-Open `/dashboard.html` (or the `Dashboard` link on the main page). The page shows only a login form until the admin password is entered; no statistics are loaded before login. The login is kept in the browser tab's session storage and shared with the main page.
+Open `/dashboard.html` (or the `Dashboard` link, shown to admins only). A signed-out visitor is sent to `login.html?returnUrl=/dashboard.html`. A `User` sees a no-permission card with a link to the File List, and no statistics or user data is requested.
 
-After login the Dashboard shows:
+For admins the Dashboard shows:
 
-- Total files, total size and total folders (subfolders below the top-level folders), plus the file count and size of each top-level folder including its subfolders.
-- The 10 most recently updated files and the 10 largest files, with name, folder path, size and modified time.
-- A `Refresh` button that reloads the statistics and the folder tree.
-- The folder tree. Click the arrow to expand or collapse a folder, and click a folder name to list the files directly in that folder.
-- Admin actions on the selected folder: create a subfolder, rename, and delete (rename and delete are not offered for `documents` and `tools`). Deleting a folder always asks for confirmation and states how many files and subfolders it contains. Files in the selected folder can be downloaded or deleted after confirmation.
+- Metric cards: total files, total size, total folders (subfolders below the top-level folders), and one card per top-level folder with its file count and size, including subfolders.
+- Recently Updated and Largest Files cards (10 each) with name, folder path, size and modified time.
+- A `Refresh` button that reloads the statistics, the folder tree and the users.
+- The Folders card. Click the arrow to expand or collapse a folder, and click a folder name to list the files directly in that folder. The card header shows the selected path with Rename and Delete (not offered for `documents` and `tools`). Deleting a folder always asks for confirmation and states how many files and subfolders it contains. Files in the selected folder can be downloaded or deleted after confirmation.
+- The Users card with username, role, status and created date. Change the role with the dropdown, or use Enable/Disable (Disable asks for confirmation). Server messages, such as the last-admin error, are shown under the card title.
 
-If the admin password stops being valid (for example after it is changed on the server), the next admin request returns 401 and the Dashboard goes back to the login form. Errors from the server are shown with the server's message.
+If the session ends (for example the account is disabled), the next request returns 401 and the page goes to the login form. Errors from the server are shown with the server's message.
 
 ## API
 
-Admin routes need the header `X-Admin-Password`. Every error response is JSON `{ "message": "..." }`: 400 invalid input, 401 missing or wrong admin password, 404 folder or file not found, 409 conflict (duplicate name, folder not empty, file or folder in use), 500 unexpected error.
+Every `/api/` route except register, login and logout needs a signed-in session. Unsafe methods (`POST`, `PUT`, `PATCH`, `DELETE`) must send the header `X-Requested-With: XMLHttpRequest` (403 otherwise); the web pages do this automatically. Every error response is JSON `{ "message": "..." }`: 400 invalid input, 401 not signed in, 403 no permission (or missing header), 404 not found, 409 conflict (duplicate name, folder not empty, file or folder in use, last admin), 429 too many attempts, 500 unexpected error.
 
 | Method | Route | Auth | Description |
 |---|---|---|---|
-| GET | `/api/categories` | - | Top-level folders (`key`, `name`). |
-| GET | `/api/folders/tree` | - | Folder tree, one node per top-level folder: `name`, `path`, `fileCount` (direct files), `children`. |
-| GET | `/api/files?path=` | - | Files directly in the folder `path`. Each item has `category`, `categoryName`, `name`, `size`, `modified`, `path`. Without `path`, `category=` (or nothing / `all`) lists files in the top-level folders only, as before. |
-| POST | `/api/upload` | - | Multipart form with `files` and the target folder in `path` (or the old `category` field). The folder must exist (404 otherwise). Too large files return 400 `File exceeds N MB.`. |
-| GET | `/api/download?path=&name=` | - | Downloads a file from any folder. |
-| GET | `/api/download/{category}/{filename}` | - | Old route, downloads a file from a top-level folder. |
+| POST | `/api/auth/register` | anonymous | JSON `{ "username", "password", "confirmPassword" }`, returns 201 `{ username, role }` and signs in. 409 when the name is taken. Rate limited. |
+| POST | `/api/auth/login` | anonymous | JSON `{ "username", "password" }`, returns 200 `{ username, role }` and signs in. 401 invalid credentials, 403 disabled account, 429 locked. Rate limited. |
+| POST | `/api/auth/logout` | anonymous | Ends all sessions of the signed-in user, returns 204. |
+| GET | `/api/auth/me` | signed in | `{ username, role }`. |
+| GET | `/api/users` | admin | Users: `id`, `username`, `role`, `disabled`, `createdUtc`. |
+| PATCH | `/api/users/{id}` | admin | JSON `{ "role": "Admin"\|"User", "disabled": true\|false }` (either field), returns the updated user. 409 when no active admin would remain. |
+| GET | `/api/categories` | signed in | Top-level folders (`key`, `name`). |
+| GET | `/api/folders/tree` | signed in | Folder tree, one node per top-level folder: `name`, `path`, `fileCount` (direct files), `children`. |
+| GET | `/api/files?path=` | signed in | Files directly in the folder `path`. Each item has `category`, `categoryName`, `name`, `size`, `modified`, `path`. Without `path`, `category=` (or nothing / `all`) lists files in the top-level folders only, as before. |
+| POST | `/api/upload` | signed in | Multipart form with `files` and the target folder in `path` (or the old `category` field). The folder must exist (404 otherwise). Too large files return 400 `File exceeds N MB.`. |
+| GET | `/api/download?path=&name=` | signed in | Downloads a file from any folder. |
+| GET | `/api/download/{category}/{filename}` | signed in | Old route, downloads a file from a top-level folder. |
 | DELETE | `/api/files?path=&name=` | admin | Deletes a file from any folder. |
 | DELETE | `/api/files/{category}/{filename}` | admin | Old route, deletes a file from a top-level folder. |
-| POST | `/api/admin/verify` | - | JSON `{ "password": "..." }`, returns 200 when the password is correct, otherwise 401. |
 | GET | `/api/admin/stats` | admin | Totals, per top-level folder totals, `recentFiles` and `largestFiles` (10 each). |
 | POST | `/api/folders` | admin | JSON `{ "parentPath": "documents", "name": "Projects" }`, returns 201 with the new folder node. |
 | PATCH | `/api/folders` | admin | JSON `{ "path": "documents/Projects", "newName": "Archive" }`, returns 200 with the renamed folder node. Top-level folders return 400. |
 | DELETE | `/api/folders?path=&recursive=` | admin | Deletes a folder. A non-empty folder needs `recursive=true` (409 otherwise). Top-level folders and folders containing links return 400. |
+
+Removed: `POST /api/admin/verify` (now 404) and the `X-Admin-Password` header, which is no longer read. Scripts that used them must sign in through `/api/auth/login` and keep the cookie.
+
+## Upgrading
+
+- Anonymous browsing and downloading are over: everyone must register or log in. Register the first admin on the server machine (see above).
+- Remove `AdminPassword` from `appsettings.json` and change that password anywhere else it was used.
+- Do a hard refresh (Ctrl+F5) after upgrading. A cached old `common.js` does not send the `X-Requested-With` header and its requests fail with 403.
+- Re-run the installer (or create the writable `data` folder) so the server can write the account file.
 
 ## Limitations
 
