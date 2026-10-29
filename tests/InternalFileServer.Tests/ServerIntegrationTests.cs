@@ -411,6 +411,52 @@ public class ServerIntegrationTests
     }
 
     [Fact]
+    public async Task User_list_never_exposes_hashes_or_stamps()
+    {
+        using var server = new TestServer();
+        var admin = await server.SignedInAsync("admin1");
+
+        var body = await (await admin.GetAsync("/api/users")).Content.ReadAsStringAsync();
+
+        Assert.DoesNotContain("pbkdf2", body);
+        Assert.DoesNotContain("passwordHash", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("securityStamp", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(TestServer.ValidPassword, body);
+    }
+
+    [Fact]
+    public async Task Anonymous_logout_returns_204()
+    {
+        using var server = new TestServer();
+
+        Assert.Equal(HttpStatusCode.NoContent, (await server.NewClient().PostAsync("/api/auth/logout", null)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Re_enabled_user_can_log_in_again()
+    {
+        using var server = new TestServer();
+        var admin = await server.SignedInAsync("admin1");
+        await server.SignedInAsync("user1");
+        var userId = await UserIdAsync(admin, "user1");
+
+        Assert.Equal(HttpStatusCode.OK, (await admin.PatchAsync($"/api/users/{userId}", Json(new { disabled = true }))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.PatchAsync($"/api/users/{userId}", Json(new { disabled = false }))).StatusCode);
+
+        var login = await server.NewClient().PostAsJsonAsync("/api/auth/login", new { username = "user1", password = TestServer.ValidPassword });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+    }
+
+    [Fact]
+    public async Task Patch_of_an_unknown_user_returns_404()
+    {
+        using var server = new TestServer();
+        var admin = await server.SignedInAsync("admin1");
+
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.PatchAsync("/api/users/missing", Json(new { role = "User" }))).StatusCode);
+    }
+
+    [Fact]
     public async Task Remote_registration_without_an_admin_is_refused()
     {
         using var server = new TestServer();
