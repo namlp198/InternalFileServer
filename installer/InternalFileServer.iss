@@ -35,6 +35,7 @@ Name: "startup"; Description: "Start Internal File Server when Windows starts"; 
 
 [Dirs]
 Name: "{app}\uploads"; Permissions: users-modify
+Name: "{app}\data"; Permissions: users-modify
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Excludes: "*.pdb"; Flags: ignoreversion recursesubdirs createallsubdirs

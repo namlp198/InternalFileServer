@@ -1,14 +1,16 @@
-using System.Security.Cryptography;
-using System.Text;
+using System.Net;
+using System.Security.Claims;
 using System.Text.Json;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var uploadDirectory = builder.Configuration["FileServer:UploadDirectory"] ?? "uploads";
 var maxUploadSizeMb = builder.Configuration.GetValue("FileServer:MaxUploadSizeMB", 2048);
-var adminPassword = builder.Configuration["FileServer:AdminPassword"] ?? "change-me";
 var maxFolderDepth = builder.Configuration.GetValue("FileServer:MaxFolderDepth", 10);
 var maxFolderNameLength = builder.Configuration.GetValue("FileServer:MaxFolderNameLength", 100);
 var maxUploadSizeBytes = maxUploadSizeMb * 1024L * 1024L;
@@ -36,8 +38,84 @@ builder.Services.Configure<FormOptions>(options =>
 // Parameter binding failures throw so the error middleware can answer them with a JSON message.
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 
+builder.Services.AddSingleton(services =>
+{
+    var store = new UserStore(ResolveUserStorePath(services.GetRequiredService<IConfiguration>(), services.GetRequiredService<IWebHostEnvironment>()));
+    store.Load();
+    return store;
+});
+
+builder.Services.AddSingleton(services =>
+{
+    var configuration = services.GetRequiredService<IConfiguration>();
+    return new LoginThrottle(
+        configuration.GetValue("FileServer:MaxFailedLogins", 5),
+        TimeSpan.FromMinutes(configuration.GetValue("FileServer:LockoutMinutes", 15)));
+});
+
+builder.Services
+    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.Cookie.Name = Program.SessionCookieName;
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context => WriteStatusAsync(context.Response, StatusCodes.Status401Unauthorized, "Sign in required.");
+        options.Events.OnRedirectToAccessDenied = context => WriteStatusAsync(context.Response, StatusCodes.Status403Forbidden, "You do not have permission for this action.");
+        options.Events.OnValidatePrincipal = async context =>
+        {
+            var store = context.HttpContext.RequestServices.GetRequiredService<UserStore>();
+            var id = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+            var user = id is null ? null : store.FindById(id);
+            if (user is null || user.Disabled || user.SecurityStamp != context.Principal?.FindFirstValue(Program.StampClaim))
+            {
+                context.RejectPrincipal();
+                await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+                return;
+            }
+
+            context.ReplacePrincipal(CreatePrincipal(user));
+        };
+    });
+
+builder.Services
+    .AddOptions<CookieAuthenticationOptions>(CookieAuthenticationDefaults.AuthenticationScheme)
+    .Configure<IConfiguration>((options, configuration) =>
+    {
+        options.ExpireTimeSpan = TimeSpan.FromHours(configuration.GetValue("FileServer:SessionHours", 8));
+    });
+
+builder.Services.AddAuthorization(options =>
+{
+    options.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build();
+    options.AddPolicy(Program.AdminPolicy, policy => policy.RequireAuthenticatedUser().RequireRole(UserStore.AdminRole));
+});
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(new { message = "Too many requests. Try again later." }, cancellationToken);
+    };
+    options.AddPolicy(Program.AuthRateLimitPolicy, context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
+
 var app = builder.Build();
-var uploadRoot = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, uploadDirectory));
+var uploadRoot = ResolveUploadRoot(app.Configuration, app.Environment);
+var minPasswordLength = app.Configuration.GetValue("FileServer:MinPasswordLength", AccountRules.DefaultMinPasswordLength);
+if (!string.IsNullOrEmpty(app.Configuration["FileServer:AdminPassword"]))
+{
+    app.Logger.LogWarning("FileServer:AdminPassword is no longer used and is ignored. Remove it from the configuration.");
+}
+
+// Resolving the store here makes a corrupt file or an unsafe path fail startup instead of the first request.
+var userStore = app.Services.GetRequiredService<UserStore>();
+var loginThrottle = app.Services.GetRequiredService<LoginThrottle>();
 var fileStore = new FileStore(uploadRoot, categories, maxFolderDepth, maxFolderNameLength);
 fileStore.EnsureRoots();
 var contentTypes = new FileExtensionContentTypeProvider();
@@ -76,8 +154,104 @@ app.Use(async (context, next) =>
     }
 });
 
+// Cross-site pages cannot add this header without a CORS preflight, which the server never grants.
+app.Use(async (context, next) =>
+{
+    if (RequiresCsrfHeader(context.Request) && context.Request.Headers["X-Requested-With"] != "XMLHttpRequest")
+    {
+        await WriteStatusAsync(context.Response, StatusCodes.Status403Forbidden, "Missing X-Requested-With header.");
+        return;
+    }
+
+    await next(context);
+});
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseRateLimiter();
+
+app.MapPost("/api/auth/register", async (HttpContext context) =>
+{
+    var request = await ReadJsonAsync<RegisterRequest>(context.Request);
+    AccountRules.ValidateUsername(request.Username);
+    AccountRules.ValidatePassword(request.Password, request.ConfirmPassword, minPasswordLength);
+
+    var firstAdmin = !userStore.HasActiveAdmin();
+    if (firstAdmin && !IsLoopback(context))
+    {
+        return Results.Json(
+            new { message = "Setup is not complete. Register the first account on the server machine." },
+            statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var account = userStore.Register(request.Username!, request.Password!, firstAdmin ? UserStore.AdminRole : UserStore.UserRole);
+    await SignInAsync(context, account);
+    app.Logger.LogInformation("Registered user {Username} as {Role}.", account.Username, account.Role);
+    return Results.Json(new { username = account.Username, role = account.Role }, statusCode: StatusCodes.Status201Created);
+}).AllowAnonymous().RequireRateLimiting(Program.AuthRateLimitPolicy);
+
+app.MapPost("/api/auth/login", async (HttpContext context) =>
+{
+    var request = await ReadJsonAsync<LoginRequest>(context.Request);
+    var username = request.Username ?? string.Empty;
+    var password = request.Password ?? string.Empty;
+
+    if (loginThrottle.GetLockout(username) is { } remaining)
+    {
+        var minutes = Math.Max(1, (int)Math.Ceiling(remaining.TotalMinutes));
+        context.Response.Headers.RetryAfter = ((int)Math.Ceiling(remaining.TotalSeconds)).ToString();
+        return Results.Json(
+            new { message = $"Too many failed attempts. Try again in {minutes} minute(s)." },
+            statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    var account = userStore.FindByUsername(username);
+    if (account is null)
+    {
+        AccountRules.VerifyDummy(password);
+    }
+
+    if (account is null || !AccountRules.VerifyPassword(password, account.PasswordHash))
+    {
+        loginThrottle.RecordFailure(username);
+        return Results.Json(new { message = "Invalid username or password." }, statusCode: StatusCodes.Status401Unauthorized);
+    }
+
+    if (account.Disabled)
+    {
+        return Results.Json(new { message = "This account is disabled." }, statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    loginThrottle.RecordSuccess(username);
+    await SignInAsync(context, account);
+    return Results.Ok(new { username = account.Username, role = account.Role });
+}).AllowAnonymous().RequireRateLimiting(Program.AuthRateLimitPolicy);
+
+// Rotating the stamp ends every session of the user, not just this one.
+app.MapPost("/api/auth/logout", async (HttpContext context) =>
+{
+    var id = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    if (id is not null && userStore.FindById(id) is not null)
+    {
+        userStore.RotateStamp(id);
+    }
+
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.NoContent();
+}).AllowAnonymous();
+
+app.MapGet("/api/auth/me", (ClaimsPrincipal user) =>
+    Results.Ok(new { username = user.Identity?.Name, role = user.FindFirstValue(ClaimTypes.Role) }));
+
+app.MapGet("/api/users", () => Results.Ok(userStore.List())).RequireAuthorization(Program.AdminPolicy);
+
+app.MapPatch("/api/users/{id}", async (string id, HttpRequest request) =>
+{
+    var update = await ReadJsonAsync<UpdateUserRequest>(request);
+    return Results.Ok(userStore.Update(id, update.Role, update.Disabled));
+}).RequireAuthorization(Program.AdminPolicy);
 
 app.MapGet("/api/categories", () =>
 {
@@ -101,13 +275,6 @@ app.MapGet("/api/files", (string? path, string? category) =>
     }
 
     return Results.Ok(files.OrderByDescending(file => file.Modified).ToList());
-});
-
-app.MapPost("/api/admin/verify", (AdminLogin login) =>
-{
-    return IsAdmin(login.Password, adminPassword)
-        ? Results.Ok(new { isAdmin = true })
-        : AdminRequired();
 });
 
 app.MapPost("/api/upload", async (HttpRequest request) =>
@@ -161,43 +328,28 @@ app.MapGet("/api/download", (string? path, string? name) => DownloadFile(path, n
 
 app.MapGet("/api/download/{category}/{filename}", (string category, string filename) => DownloadFile(category, filename));
 
-app.MapDelete("/api/files", (string? path, string? name, HttpRequest request) => DeleteFile(request, path, name));
+app.MapDelete("/api/files", (string? path, string? name) => DeleteFile(path, name)).RequireAuthorization(Program.AdminPolicy);
 
-app.MapDelete("/api/files/{category}/{filename}", (string category, string filename, HttpRequest request) => DeleteFile(request, category, filename));
+app.MapDelete("/api/files/{category}/{filename}", (string category, string filename) => DeleteFile(category, filename)).RequireAuthorization(Program.AdminPolicy);
 
 app.MapGet("/api/folders/tree", (CancellationToken cancellationToken) => Results.Ok(fileStore.GetTree(cancellationToken)));
 
-// Admin endpoints read their input only after the password check, so a 401 never touches the disk.
+// Authorization runs before the handler, so a 401 or 403 never reads input or touches the disk.
 app.MapPost("/api/folders", async (HttpRequest request) =>
 {
-    if (!IsAdminRequest(request))
-    {
-        return AdminRequired();
-    }
-
     var folder = await ReadJsonAsync<CreateFolderRequest>(request);
     var created = fileStore.CreateFolder(folder.ParentPath, folder.Name);
     return Results.Created($"/api/files?path={Uri.EscapeDataString(created.Path)}", created);
-});
+}).RequireAuthorization(Program.AdminPolicy);
 
 app.MapPatch("/api/folders", async (HttpRequest request) =>
 {
-    if (!IsAdminRequest(request))
-    {
-        return AdminRequired();
-    }
-
     var rename = await ReadJsonAsync<RenameFolderRequest>(request);
     return Results.Ok(fileStore.RenameFolder(rename.Path, rename.NewName));
-});
+}).RequireAuthorization(Program.AdminPolicy);
 
 app.MapDelete("/api/folders", (HttpRequest request) =>
 {
-    if (!IsAdminRequest(request))
-    {
-        return AdminRequired();
-    }
-
     var recursiveValue = request.Query["recursive"].ToString();
     var recursive = false;
     if (recursiveValue.Length > 0 && !bool.TryParse(recursiveValue, out recursive))
@@ -207,21 +359,12 @@ app.MapDelete("/api/folders", (HttpRequest request) =>
 
     fileStore.DeleteFolder(request.Query["path"].ToString(), recursive);
     return Results.Ok(new { message = "Folder deleted." });
-});
+}).RequireAuthorization(Program.AdminPolicy);
 
-app.MapGet("/api/admin/stats", (HttpRequest request, CancellationToken cancellationToken) =>
-{
-    return IsAdminRequest(request)
-        ? Results.Ok(fileStore.GetStats(cancellationToken))
-        : AdminRequired();
-});
+app.MapGet("/api/admin/stats", (CancellationToken cancellationToken) => Results.Ok(fileStore.GetStats(cancellationToken)))
+    .RequireAuthorization(Program.AdminPolicy);
 
 app.Run();
-
-bool IsAdminRequest(HttpRequest request)
-{
-    return IsAdmin(request.Headers["X-Admin-Password"].ToString(), adminPassword);
-}
 
 IResult DownloadFile(string? path, string? name)
 {
@@ -234,13 +377,8 @@ IResult DownloadFile(string? path, string? name)
     return Results.File(file.FullPath, contentType, file.Name);
 }
 
-IResult DeleteFile(HttpRequest request, string? path, string? name)
+IResult DeleteFile(string? path, string? name)
 {
-    if (!IsAdminRequest(request))
-    {
-        return AdminRequired();
-    }
-
     fileStore.DeleteFile(path, name);
     return Results.Ok(new { message = "Deleted." });
 }
@@ -263,26 +401,76 @@ static async Task<T> ReadJsonAsync<T>(HttpRequest request) where T : class
     }
 }
 
-static IResult AdminRequired()
+static bool RequiresCsrfHeader(HttpRequest request)
 {
-    return Results.Json(new { message = "Invalid admin password." }, statusCode: StatusCodes.Status401Unauthorized);
+    return request.Path.StartsWithSegments("/api")
+        && (HttpMethods.IsPost(request.Method) || HttpMethods.IsPut(request.Method)
+            || HttpMethods.IsPatch(request.Method) || HttpMethods.IsDelete(request.Method));
 }
 
-static bool IsAdmin(string? password, string adminPassword)
+static bool IsLoopback(HttpContext context)
 {
-    if (string.IsNullOrWhiteSpace(adminPassword) || password is null)
+    return context.Connection.RemoteIpAddress is { } address && IPAddress.IsLoopback(address);
+}
+
+static ClaimsPrincipal CreatePrincipal(UserAccount user)
+{
+    var claims = new[]
     {
-        return false;
+        new Claim(ClaimTypes.NameIdentifier, user.Id),
+        new Claim(ClaimTypes.Name, user.Username),
+        new Claim(ClaimTypes.Role, user.Role),
+        new Claim(Program.StampClaim, user.SecurityStamp)
+    };
+    return new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+}
+
+static Task SignInAsync(HttpContext context, UserAccount user)
+{
+    return context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, CreatePrincipal(user));
+}
+
+static Task WriteStatusAsync(HttpResponse response, int statusCode, string message)
+{
+    response.StatusCode = statusCode;
+    return response.WriteAsJsonAsync(new { message });
+}
+
+static string ResolveUploadRoot(IConfiguration configuration, IHostEnvironment environment)
+{
+    var uploadDirectory = configuration["FileServer:UploadDirectory"] ?? "uploads";
+    return Path.GetFullPath(Path.Combine(environment.ContentRootPath, uploadDirectory));
+}
+
+static string ResolveUserStorePath(IConfiguration configuration, IWebHostEnvironment environment)
+{
+    var configured = configuration["FileServer:UserStoreFile"];
+    var storePath = Path.GetFullPath(Path.Combine(environment.ContentRootPath, string.IsNullOrWhiteSpace(configured) ? "data/users.json" : configured));
+    var forbiddenRoots = new[] { environment.WebRootPath, ResolveUploadRoot(configuration, environment) };
+    foreach (var root in forbiddenRoots.Where(root => !string.IsNullOrEmpty(root)))
+    {
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (storePath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"FileServer:UserStoreFile must not be inside '{root}'.");
+        }
     }
 
-    // Hashing first gives both sides the same length, so the comparison time does not reveal the password length.
-    var expected = SHA256.HashData(Encoding.UTF8.GetBytes(adminPassword));
-    var actual = SHA256.HashData(Encoding.UTF8.GetBytes(password));
-    return CryptographicOperations.FixedTimeEquals(actual, expected);
+    return storePath;
+}
+
+public partial class Program
+{
+    internal const string SessionCookieName = "ifs.session";
+    internal const string StampClaim = "stamp";
+    internal const string AdminPolicy = "Admin";
+    internal const string AuthRateLimitPolicy = "auth";
 }
 
 record CategoryItem(string Key, string Name);
-record AdminLogin(string Password);
+record RegisterRequest(string? Username, string? Password, string? ConfirmPassword);
+record LoginRequest(string? Username, string? Password);
+record UpdateUserRequest(string? Role, bool? Disabled);
 record FileItem(string Category, string CategoryName, string Name, long Size, DateTime Modified, string Path);
 record FolderNode(string Name, string Path, int FileCount, IReadOnlyList<FolderNode> Children);
 record RootStats(string Key, string Name, int FileCount, long TotalBytes);
